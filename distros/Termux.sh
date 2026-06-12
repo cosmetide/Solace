@@ -8,9 +8,9 @@ CYN='\033[1;36m'
 BLU='\033[1;34m'
 RST='\033[0m'
 
-REMOTE_URL="https://raw.githubusercontent.com/Earth-Restored/Solace/refs/heads/main/distros/Termux.sh"
+REMOTE_URL="https://raw.githubusercontent.com/cosmetide/Solace/refs/heads/main/distros/Termux.sh"
 SELF_PATH="$(realpath "$0")"
-GITHUB_REPO="Earth-Restored/Solace"
+GITHUB_REPO="cosmetide/Solace"
 GITHUB_URL="https://github.com/$GITHUB_REPO.git"
 
 RELEASE_ARCH="linux-arm64"
@@ -189,7 +189,7 @@ CYN='\033[1;36m'
 BLU='\033[1;34m'
 RST='\033[0m'
 
-GITHUB_REPO="Earth-Restored/Solace"
+GITHUB_REPO="cosmetide/Solace"
 GITHUB_URL="https://github.com/$GITHUB_REPO.git"
 
 DB=~/Solace/nohup.log
@@ -336,7 +336,7 @@ first_start_checks() {
         echo "  server setup instructions."
         echo ""
         echo "  Read the full guide:"
-        echo "  https://github.com/Earth-Restored/Solace/blob/main/INSTALLATION.md"
+        echo "  https://github.com/cosmetide/Solace/blob/main/INSTALLATION.md"
         echo ""
         echo "  If you lose access to your admin account,"
         echo "  you can reset it in:"
@@ -431,6 +431,9 @@ done
 update_solace() {
     load_settings
     if [ "$INSTALL_BRANCH" = "dev" ]; then
+        local confirm
+        confirm=$(printf "Yes, continue\nNo, cancel" | fzf --height=20% --reverse --border --prompt="Dev builds are unstable. Continue? > ")
+        [ "$confirm" != "Yes, continue" ] && return
         echo -e "${YLW}Downloading latest developer build...${RST}"
         force_stop_server
         local zip_name="Solace-Dev-${RELEASE_ARCH}.zip"
@@ -514,12 +517,12 @@ settings_menu() {
         echo "  Server: $SOLACE_DIR"
         echo ""
 
-        CHOICE=$(printf "Switch Branch (re-download)\nReset Account Database\nUninstall\nBack" | fzf \
+        CHOICE=$(printf "Switch Branch\nReset Account Database\nUninstall\nBack" | fzf \
             --height=20% --reverse --border --prompt="Settings > " --no-multi)
 
         case "$CHOICE" in
             "Back") return ;;
-            "Switch Branch (re-download)")
+            "Switch Branch")
                 local sel
                 sel=$(pick_branch "Switch Branch") || break
                 force_stop_server
@@ -673,6 +676,28 @@ pick_branch() {
 }
 
 load_settings
+
+check_update() {
+    local json=$(curl -s "https://api.github.com/repos/$GITHUB_REPO/releases?per_page=1")
+    local latest=$(echo "$json" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"//;s/"//' | grep -v "^dev-build$" | head -n1)
+    [ -z "$latest" ] && return
+    local dismissed=$(grep -o '"dismissedUpdate": *"[^"]*"' "$SETTINGS_FILE" 2>/dev/null | cut -d'"' -f4)
+    [ "$dismissed" = "$latest" ] && return
+    [ "$latest" = "$CURRENT_VERSION" ] && return
+    local choice
+    choice=$(printf "Yes, update\nNo, don't show again" | fzf --height=20% --reverse --border --prompt="New version $latest available. Update now? > ")
+    if [ "$choice" = "Yes, update" ]; then
+        update_solace
+    else
+        if grep -q '"dismissedUpdate"' "$SETTINGS_FILE" 2>/dev/null; then
+            sed -i 's/"dismissedUpdate": *"[^"]*"/"dismissedUpdate": "'"$latest"'"/' "$SETTINGS_FILE"
+        else
+            sed -i '/"updatedAt"/i\  "dismissedUpdate": "'"$latest"'",' "$SETTINGS_FILE"
+        fi
+    fi
+}
+
+check_update
 
 while true; do
     printf '\033[H\033[J'; tput civis 2>/dev/null; show_banner

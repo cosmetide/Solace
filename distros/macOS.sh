@@ -8,9 +8,9 @@ CYN='\033[1;36m'
 BLU='\033[1;34m'
 RST='\033[0m'
 
-REMOTE_URL="https://raw.githubusercontent.com/Earth-Restored/Solace/refs/heads/main/distros/macOS.sh"
+REMOTE_URL="https://raw.githubusercontent.com/cosmetide/Solace/refs/heads/main/distros/macOS.sh"
 SELF_PATH="$(realpath "$0")"
-GITHUB_REPO="Earth-Restored/Solace"
+GITHUB_REPO="cosmetide/Solace"
 GITHUB_URL="https://github.com/$GITHUB_REPO.git"
 
 SOLACE_DIR="$HOME/solace"
@@ -232,7 +232,7 @@ first_start_checks() {
         echo "  server setup instructions."
         echo ""
         echo "  Read the full guide:"
-        echo "  https://github.com/Earth-Restored/Solace/blob/main/INSTALLATION.md"
+        echo "  https://github.com/cosmetide/Solace/blob/main/INSTALLATION.md"
         echo ""
         echo "  If you lose access to your admin account,"
         echo "  you can reset it in:"
@@ -339,7 +339,43 @@ JSONEOF
 
 update_solace() {
     load_settings
+
+    if [ "$INSTALL_MODE" = "source" ]; then
+        local sel
+        sel=$(pick_branch "Update Source") || return
+        stop_server
+        if [ ! -d "$SOURCE_DIR/.git" ]; then
+            rm -rf "$SOURCE_DIR"
+            git clone --recurse-submodules -b "$sel" "$GITHUB_URL" "$SOURCE_DIR"
+        else
+            cd "$SOURCE_DIR" || return
+            git fetch origin "$sel"
+            git reset --hard "origin/$sel"
+            git submodule update --init --recursive
+        fi
+        cd "$SOURCE_DIR" || return
+        env DOTNET_ROOT="$HOME/.dotnet" PATH="$HOME/.dotnet:$PATH" pwsh ./publish.ps1 --profiles "framework-dependent-osx-$ARCH_PROFILE"
+        local build_dir="$SOURCE_DIR/build/Release/framework-dependent-osx-$ARCH_PROFILE"
+        if [ -d "$build_dir" ]; then
+            mkdir -p "$SERVER_DIR"
+            cp -r "$build_dir/"* "$SERVER_DIR/" 2>/dev/null || true
+            chmod -R +x "$SERVER_DIR/components/" 2>/dev/null || true
+            echo "$sel" > "$VERSION_FILE"
+            cat > "$SETTINGS_FILE" << JSONEOF
+{"installMode":"source","branch":"$sel","version":"$sel","updatedAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
+JSONEOF
+            echo "[Solace] Build complete ($sel)"
+        else
+            echo -e "${RED}[ERROR] Build output not found${RST}"
+        fi
+        sleep 2
+        return
+    fi
+
     if [ "$INSTALL_BRANCH" = "dev" ]; then
+        local confirm
+        confirm=$(printf "Yes, continue\nNo, cancel" | fzf --height=20% --reverse --border --prompt="Dev builds are unstable. Continue? > ")
+        [ "$confirm" != "Yes, continue" ] && return
         echo -e "${YLW}Downloading dev build...${RST}"
         stop_server
         local zip_name="Solace-Dev-osx-${ARCH_PROFILE}.zip"
@@ -416,10 +452,23 @@ settings_menu() {
         if [ "$INSTALL_MODE" = "source" ] && [ -d "$SOURCE_DIR/.git" ]; then
             options+=("Rebuild from Source"); options+=("Delete Source Folder"); options+=("Switch to Prebuilt Mode")
         elif [ ! -d "$SOURCE_DIR/.git" ]; then options+=("Switch to Source Mode"); fi
-        options+=("Reset Account Database"); options+=("Uninstall"); options+=("Back")
+        options+=("Startup"); options+=("Reset Account Database"); options+=("Uninstall"); options+=("Back")
         CHOICE=$(printf "%s\n" "${options[@]}" | fzf --height=40% --reverse --border --prompt="Settings > " --no-multi)
         case "$CHOICE" in
             "Back") return ;;
+            "Startup")
+                local state="Manual Start"
+                [ -f "$PLIST" ] && launchctl list com.solace.server >/dev/null 2>&1 && state="Start on Boot"
+                local sel2
+                sel2=$(printf "Start on Boot\nManual Start\nBack" | fzf --height=20% --reverse --border --prompt="Startup (currently: $state) > " --no-multi)
+                case "$sel2" in
+                    "Start on Boot")
+                        launchctl load "$PLIST" 2>/dev/null || true
+                        echo "[Solace] Service will start on boot."; sleep 2 ;;
+                    "Manual Start")
+                        launchctl unload "$PLIST" 2>/dev/null || true
+                        echo "[Solace] Service set to manual start."; sleep 2 ;;
+                esac ;;
             "Switch Branch")
                 if [ -d "$SOURCE_DIR/.git" ]; then
                     local sel
@@ -577,6 +626,29 @@ show_banner() {
 }
 
 load_settings
+
+check_update() {
+    [ "$INSTALL_MODE" = "source" ] && return
+    local json=$(curl -s "https://api.github.com/repos/$GITHUB_REPO/releases?per_page=1")
+    local latest=$(echo "$json" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"//;s/"//' | grep -v "^dev-build$" | head -n1)
+    [ -z "$latest" ] && return
+    local dismissed=$(grep -o '"dismissedUpdate": *"[^"]*"' "$SETTINGS_FILE" 2>/dev/null | cut -d'"' -f4)
+    [ "$dismissed" = "$latest" ] && return
+    [ "$latest" = "$CURRENT_VERSION" ] && return
+    local choice
+    choice=$(printf "Yes, update\nNo, don't show again" | fzf --height=20% --reverse --border --prompt="New version $latest available. Update now? > ")
+    if [ "$choice" = "Yes, update" ]; then
+        update_solace
+    else
+        if grep -q '"dismissedUpdate"' "$SETTINGS_FILE" 2>/dev/null; then
+            sed -i 's/"dismissedUpdate": *"[^"]*"/"dismissedUpdate": "'"$latest"'"/' "$SETTINGS_FILE"
+        else
+            sed -i '/"updatedAt"/i\  "dismissedUpdate": "'"$latest"'",' "$SETTINGS_FILE"
+        fi
+    fi
+}
+
+check_update
 
 section_title() {
     local title="$1"

@@ -9,6 +9,7 @@ BLU='\033[1;34m'
 RST='\033[0m'
 
 banner() {
+    clear
     echo -e "${BLU}"
     echo "   _____       __"
     echo "  / ___/____  / /___ _________"
@@ -16,6 +17,20 @@ banner() {
     echo " ___/ / /_/ / / /_/ / /__/  __/"
     echo "/____/\____/_/\__,_/\___/\___/"
     echo -e "${RST}"
+    echo ""
+}
+
+spinner() {
+    local pid=$1
+    local msg="$2"
+    local spin='-\|/'
+    local i=0
+    while kill -0 "$pid" 2>/dev/null; do
+        i=$(( (i+1) % 4 ))
+        printf "\r  ${CYN}%s${RST} ${spin:$i:1}" "$msg"
+        sleep 0.1
+    done
+    printf "\r  ${GRN}✓${RST} ${msg}        \n"
 }
 
 help_text() {
@@ -44,20 +59,21 @@ done
 
 print_step() {
     echo ""
-    echo -e "${CYN}========================================${RST}"
-    echo -e "${CYN}  $1${RST}"
-    echo -e "${CYN}========================================${RST}"
+    echo -e "${BLU}┌──────────────────────────────────────┐${RST}"
+    echo -e "${BLU}│${RST}  ${CYN}◆${RST}  $1"
+    echo -e "${BLU}└──────────────────────────────────────┘${RST}"
+    echo ""
 }
 
 print_sub() {
-    echo -e "  ${BLU}>${RST} $1"
+    echo -e "  ${BLU}└──${RST} $1"
 }
 
-ok()   { echo -e "${GRN}[OK] $1${RST}"; }
-skip() { echo -e "${YLW}[SKIP] $1${RST}"; }
-err()  { echo -e "${RED}[ERROR] $1${RST}"; exit 1; }
+ok()   { echo -e "  ${GRN}✔${RST} $1"; }
+skip() { echo -e "  ${YLW}○${RST} $1"; }
+err()  { echo -e "  ${RED}✖${RST} $1${RST}"; exit 1; }
 
-GITHUB_REPO="Earth-Restored/Solace"
+GITHUB_REPO="cosmetide/Solace"
 GITHUB_URL="https://github.com/$GITHUB_REPO.git"
 
 banner
@@ -92,15 +108,15 @@ if [ -n "$TERMUX_VERSION" ] || echo "$PREFIX" | grep -q "com.termux"; then
         ok "Ubuntu installed"
     fi
 
-    clear && banner
-    print_step "SELECT BRANCH"
+    banner
+    echo -e "${CYN}  ┌─ Select Branch ─────────────────────────────┐${RST}"
+    echo -e "  │                                                │"
+    echo -e "  │  ${GRN}[1]${RST}  Main — Stable (recommended)              │"
+    echo -e "  │  ${YLW}[2]${RST}  Dev   — Unstable (may break)             │"
+    echo -e "  │                                                │"
+    echo -e "  ${CYN}└────────────────────────────────────────────────┘${RST}"
     echo ""
-    echo -e "${CYN}Select branch:${RST}"
-    echo ""
-    echo -e "  ${GRN}[1] Main (stable - recommended)${RST}"
-    echo -e "  ${YLW}[2] Dev (unstable - may break)${RST}"
-    echo ""
-    printf "Choice [1/2] > "
+    printf "  ${BLU}❯${RST} Choice [1/2] > "
     read -r BRANCH_CHOICE < /dev/tty
     BRANCH_CHOICE="$(echo "$BRANCH_CHOICE" | tr -d '\r\n')"
 
@@ -171,12 +187,11 @@ if [ -z "$SELECTED_TAG" ]; then
     exit 1
 fi
 
-echo "[INFO] Downloading ${SELECTED_TAG}..."
-echo "[INFO] URL: $URL"
-curl -Lf --progress-bar -o "$ZIP_NAME" "$URL" || { echo "[ERROR] Download failed"; exit 1; }
+print_sub "Downloading ${SELECTED_TAG}..."
+curl -Lf --progress-bar -o "$ZIP_NAME" "$URL" 2>&1 | sed 's/^/  /' || { echo -e "  ${RED}✖${RST} Download failed"; exit 1; }
 unzip -o "$ZIP_NAME" || { echo "[ERROR] Failed to extract archive"; exit 1; }
 rm -rf ~/Solace/*
-echo "$TAG" > ~/Solace/version.txt
+echo "$SELECTED_TAG" > ~/Solace/version.txt
 
 if [ -d Solace-linux-arm64 ]; then
     mv Solace-linux-arm64/* ~/Solace/
@@ -439,16 +454,15 @@ fi
 
 # ─── STEP 3: INSTALL METHOD CHOICE ─────────────────────────
 
-clear && banner
-
-print_step "INSTALL METHOD"
+banner
+echo -e "${CYN}  ┌─ Install Method ───────────────────────────┐${RST}"
+echo -e "  │                                                │"
+echo -e "  │  ${GRN}[1]${RST}  Prebuilt  — Download compiled binary      │"
+echo -e "  │  ${YLW}[2]${RST}  Source    — Clone & build from source     │"
+echo -e "  │                                                │"
+echo -e "  ${CYN}└────────────────────────────────────────────────┘${RST}"
 echo ""
-echo -e "${CYN}How would you like to install Solace?${RST}"
-echo ""
-echo -e "  ${GRN}[1] Prebuilt${RST}     - Download a pre-compiled binary (faster)"
-echo -e "  ${YLW}[2] Build from Source${RST} - Clone and compile from source"
-echo ""
-printf "Choice [1/2] > "
+printf "  ${BLU}❯${RST} Choice [1/2] > "
 read -r METHOD_CHOICE < /dev/tty
 METHOD_CHOICE="$(echo "$METHOD_CHOICE" | tr -d '\r\n')"
 
@@ -469,16 +483,15 @@ sudo -u "$CURRENT_USER" mkdir -p "$SOLACE_DIR" 2>/dev/null || mkdir -p "$SOLACE_
 # ─── STEP 4A: PREBUILT PATH ────────────────────────────────
 
 if [ "$INSTALL_MODE" = "prebuilt" ]; then
-    clear && banner
-    print_step "PREBUILT INSTALL"
-
+    banner
+    echo -e "${CYN}  ┌─ Prebuilt Install ─────────────────────────┐${RST}"
+    echo -e "  │                                                │"
+    echo -e "  │  ${GRN}[1]${RST}  Main — Stable (recommended)              │"
+    echo -e "  │  ${YLW}[2]${RST}  Dev   — Unstable (may break)             │"
+    echo -e "  │                                                │"
+    echo -e "  ${CYN}└────────────────────────────────────────────────┘${RST}"
     echo ""
-    echo -e "${CYN}Select branch:${RST}"
-    echo ""
-    echo -e "  ${GRN}[1] Main (stable - recommended)${RST}"
-    echo -e "  ${YLW}[2] Dev (unstable - may break)${RST}"
-    echo ""
-    printf "Choice [1/2] > "
+    printf "  ${BLU}❯${RST} Choice [1/2] > "
     read -r BRANCH_CHOICE < /dev/tty
     BRANCH_CHOICE="$(echo "$BRANCH_CHOICE" | tr -d '\r\n')"
 
@@ -493,25 +506,11 @@ if [ "$INSTALL_MODE" = "prebuilt" ]; then
         ALL_TAGS=$(echo "$RELEASE_JSON" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"//;s/"//' | grep -v "^dev-build$")
         LATEST_TAG=$(echo "$ALL_TAGS" | head -n1)
 
-        if [ -n "$LATEST_TAG" ]; then
-            echo ""
-            echo -e "${GRN}Latest version: $LATEST_TAG${RST}"
-            echo ""
-            printf "Use latest? [Y/n] > "
-            read -r USE_LATEST < /dev/tty
-            USE_LATEST="$(echo "$USE_LATEST" | tr -d '\r\n')"
-            if [ "$USE_LATEST" = "n" ] || [ "$USE_LATEST" = "N" ] || [ "$USE_LATEST" = "no" ]; then
-                echo "$ALL_TAGS" | head -20
-                echo ""
-                printf "Enter version tag: "
-                read -r SELECTED_TAG < /dev/tty
-                [ -z "$SELECTED_TAG" ] && SELECTED_TAG="$LATEST_TAG"
-            else
-                SELECTED_TAG="$LATEST_TAG"
-            fi
-        else
+        if [ -z "$LATEST_TAG" ]; then
             err "No releases found."
         fi
+        SELECTED_TAG="$LATEST_TAG"
+        echo -e "${GRN}Latest version: $SELECTED_TAG${RST}"
 
         ARTIFACT_PREFIX="Solace"
         DISPLAY_TAG="$SELECTED_TAG"
@@ -522,7 +521,7 @@ if [ "$INSTALL_MODE" = "prebuilt" ]; then
         echo -e "${YLW}[INFO] Using Dev build${RST}"
     fi
 
-    echo "[INFO] Downloading $DISPLAY_TAG..."
+    print_sub "Downloading $DISPLAY_TAG..."
 
     ZIP_NAME="${ARTIFACT_PREFIX}-linux-${ARCH_PROFILE}.zip"
     if [ "$OS" = "Darwin" ]; then
@@ -534,7 +533,8 @@ if [ "$INSTALL_MODE" = "prebuilt" ]; then
     TMP_DIR=$(mktemp -d "/tmp/solace_install_XXXXXX")
     cd "$TMP_DIR"
 
-    if ! curl -Lf --progress-bar -o server.zip "$URL"; then
+    curl -Lf --progress-bar -o server.zip "$URL" 2>&1 | sed 's/^/  /'
+    if [ $? -ne 0 ] || [ ! -f server.zip ]; then
         err "Download failed — check your internet or the release URL"
     fi
 
@@ -577,15 +577,15 @@ fi
 # ─── STEP 4B: BUILD FROM SOURCE PATH ───────────────────────
 
 if [ "$INSTALL_MODE" = "source" ]; then
-    clear && banner
-    print_step "BUILD FROM SOURCE"
+    banner
+    echo -e "${CYN}  ┌─ Build From Source ───────────────────────┐${RST}"
+    echo -e "  │                                                │"
+    echo -e "  │  ${GRN}[1]${RST}  Main — Stable (recommended)              │"
+    echo -e "  │  ${YLW}[2]${RST}  Dev   — Not recommended (may break)      │"
+    echo -e "  │                                                │"
+    echo -e "  ${CYN}└────────────────────────────────────────────────┘${RST}"
     echo ""
-    echo -e "${CYN}Select branch:${RST}"
-    echo ""
-    echo -e "  ${GRN}[1] Main (stable - recommended)${RST}"
-    echo -e "  ${YLW}[2] Dev (not recommended - may break)${RST}"
-    echo ""
-    printf "Choice [1/2] > "
+    printf "  ${BLU}❯${RST} Choice [1/2] > "
     read -r BRANCH_CHOICE < /dev/tty
     BRANCH_CHOICE="$(echo "$BRANCH_CHOICE" | tr -d '\r\n')"
 
