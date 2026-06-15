@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   build_and_dev_release:
-    if: github.ref_name == 'dev'
+    if: github.ref_name != 'main'
     runs-on: windows-latest
     strategy:
       matrix:
@@ -30,7 +30,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: dev
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
           fetch-tags: true
 
