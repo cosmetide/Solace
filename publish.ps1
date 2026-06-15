@@ -28,7 +28,7 @@ function Invoke-ProjectPublish {
 
 git submodule update --init --recursive
 
-$projects = "Solace.ApiServer", "Solace.Buildplate", "Solace.EventBus.Server", "Solace.ObjectStore.Server", "Solace.TappablesGenerator", "Solace.TileRenderer"
+$projects = "Solace.ApiServer", "Solace.Buildplate", "Solace.EventBus.Server", "Solace.ObjectStore.Server", "Solace.TappablesGenerator", "Solace.TileRenderer", "Solace.Locator"
 
 foreach ($buildProfile in $profiles) {
     $publishDir = "./build/$configuration/$buildProfile"
@@ -64,7 +64,36 @@ foreach ($buildProfile in $profiles) {
             -BuildProfile $buildProfile
     }
 
+    Invoke-ProjectPublish `
+        -ProjectPath "./src/Solace.AppHost/Solace.AppHost.csproj" `
+        -OutDir "$publishDir/apphost" `
+        -Configuration $configuration `
+        -BuildProfile $buildProfile
+
     Copy-Item -Path "staticdata" -Destination "$publishDir/staticdata" -Recurse -Force
+
+    $aspireScriptContent = @'
+#!/usr/bin/env pwsh
+$originalPath = Get-Location
+$apphostDir = Join-Path $PSScriptRoot "apphost"
+
+try {
+    Set-Location -Path $apphostDir
+    Write-Host "Starting Solace Aspire AppHost..."
+    dotnet ./Solace.AppHost.dll @args
+}
+catch {
+    Write-Error "Failed to launch Aspire AppHost: $($_.Exception.Message)"
+}
+finally {
+    Set-Location -Path $originalPath
+}
+'@
+    $aspireScriptContent | Out-File -FilePath "$publishDir/run_aspire.ps1" -Encoding utf8
+
+    if (!$IsWindows) {
+        chmod +x "$publishDir/run_aspire.ps1"
+    }
 
     $startScriptContent = @'
 #!/usr/bin/env pwsh
