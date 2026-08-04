@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
+using Serilog;
 using System.Text.Json;
 using Solace.ApiServer.Models;
 using Solace.ApiServer.Utils;
@@ -10,6 +11,25 @@ namespace Solace.ApiServer;
 internal abstract class SolaceControllerBase : ControllerBase
 {
     private static Config config => Program.config;
+
+    protected static async Task LogRequestAsync(HttpRequest request, string source)
+    {
+        string body = string.Empty;
+        if (request.ContentLength is > 0)
+        {
+            request.EnableBuffering();
+            using var reader = new StreamReader(request.Body, leaveOpen: true);
+            body = await reader.ReadToEndAsync();
+            request.Body.Position = 0;
+        }
+
+        string headers = string.Join(", ", request.Headers.Select(header => $"{header.Key}={header.Value}"));
+
+        Log.Information(
+            "{Source}: {Method} {Scheme}://{Host}{Path}{Query} ContentType={ContentType} Headers=[{Headers}]{Body}",
+            source, request.Method, request.Scheme, request.Host, request.Path, request.QueryString, request.ContentType, headers,
+            body.Length is 0 ? string.Empty : $" Body={body}");
+    }
 
     // TODO: make these generic, might change output
     protected static ContentHttpResult EarthJson(object results)
