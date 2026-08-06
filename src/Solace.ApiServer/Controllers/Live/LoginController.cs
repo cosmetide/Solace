@@ -431,7 +431,7 @@ internal sealed partial class LoginController : SolaceControllerBase
                 </script>
             </body>
             </html>
-            """);
+            """, "text/html");
     }
 
     private static ContentHttpResult CreateOAuthTokenResponse(string userId, string username, string? scope)
