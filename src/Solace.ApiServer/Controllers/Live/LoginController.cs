@@ -203,7 +203,7 @@ internal sealed partial class LoginController : SolaceControllerBase
         => TypedResults.VirtualFile("/oauth_login.html", "text/html");
 
     [HttpPost("oauth20_desktop.srf")]
-    public async Task<Results<RedirectHttpResult, ContentHttpResult, BadRequest<string>>> OAuthLogin(
+    public async Task<Results<StatusCodeHttpResult, ContentHttpResult, BadRequest<string>>> OAuthLogin(
         [FromForm] string username,
         [FromForm] string password,
         [FromForm(Name = "redirect_uri")] string? redirectUri,
@@ -268,7 +268,13 @@ internal sealed partial class LoginController : SolaceControllerBase
             query += $"&state={Uri.EscapeDataString(state)}";
         }
 
-        return TypedResults.Redirect($"{target}{(target.Contains('?') ? "&" : "?")}{query}");
+        string location = $"{target}{(target.Contains('?') ? "&" : "?")}{query}";
+
+        Log.Debug($"OAuth20 redirect: {location}");
+
+        HttpContext.Response.StatusCode = StatusCodes.Status302Found;
+        HttpContext.Response.Headers.Location = location;
+        return TypedResults.StatusCode(StatusCodes.Status302Found);
     }
 
     [HttpPost("oauth20_token.srf")]
