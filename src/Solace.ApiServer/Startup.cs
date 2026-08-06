@@ -5,8 +5,6 @@ using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 using Serilog.Events;
-using System.IO.Compression;
-using System.Text;
 using Solace.ApiServer.Authentication;
 using Solace.ApiServer.Utils;
 
@@ -87,110 +85,6 @@ public class Startup
                 diagnosticContext.Set("RemoteIpAddress", httpContext.Connection.RemoteIpAddress);
                 diagnosticContext.Set("RequestQuery", httpContext.Request.QueryString);
             };
-        });
-
-        app.Use(async (context, next) =>
-        {
-            var path = context.Request.Path.Value ?? string.Empty;
-            bool isAuthTraffic = HttpMethods.IsPost(context.Request.Method)
-                && (path.Contains("xboxlive.com", StringComparison.OrdinalIgnoreCase)
-                    || path.EndsWith("oauth20_token.srf", StringComparison.OrdinalIgnoreCase));
-
-            if (!isAuthTraffic)
-            {
-                await next();
-                return;
-            }
-
-            // --- capture request body ---
-            byte[] reqRaw = null;
-            try
-            {
-                context.Request.EnableBuffering();
-                using (var ms = new MemoryStream())
-                {
-                    await context.Request.Body.CopyToAsync(ms);
-                    reqRaw = ms.ToArray();
-                }
-                context.Request.Body.Position = 0;
-            }
-            catch (Exception ex)
-            {
-                Log.Warning("AUTH-DEBUG REQ read failed for {Path}: {Ex}", path, ex.ToString());
-            }
-
-            if (reqRaw != null)
-            {
-                var reqBody = Encoding.UTF8.GetString(reqRaw);
-                Log.Information("AUTH-DEBUG REQ {Method} {Path}{Query} ContentType={ContentType} Length={Length}",
-                    context.Request.Method, path, context.Request.QueryString, context.Request.ContentType, reqRaw.Length);
-
-                if (reqBody.All(ch => ch >= 32 && ch != 127))
-                {
-                    Log.Information("AUTH-DEBUG REQ Body: {Body}", reqBody);
-                }
-                else
-                {
-                    Log.Information("AUTH-DEBUG REQ Body (hex): {Hex}", Convert.ToHexString(reqRaw));
-                    Log.Information("AUTH-DEBUG REQ Body (printable): {Body}",
-                        string.Concat(reqBody.Select(ch => ch >= 32 && ch != 127 ? ch : '?')));
-                }
-            }
-
-            // --- capture response body ---
-            var originalBody = context.Response.Body;
-            using (var buffer = new MemoryStream())
-            {
-                context.Response.Body = buffer;
-                try
-                {
-                    await next();
-                }
-                finally
-                {
-                    context.Response.Body = originalBody;
-                }
-
-                Log.Information("AUTH-DEBUG RSP {Path} -> {StatusCode} ContentType={ContentType}",
-                    path, context.Response.StatusCode, context.Response.ContentType);
-
-                var respRaw = buffer.ToArray();
-                if (respRaw.Length > 0)
-                {
-                    bool isGzip = string.Equals(context.Response.Headers.ContentEncoding.ToString(), "gzip", StringComparison.OrdinalIgnoreCase);
-                    var logBytes = respRaw;
-                    if (isGzip)
-                    {
-                        try
-                        {
-                            using var gz = new MemoryStream(respRaw);
-                            using var gzOut = new MemoryStream();
-                            using (var gzStream = new GZipStream(gz, CompressionMode.Decompress))
-                            {
-                                await gzStream.CopyToAsync(gzOut);
-                            }
-                            logBytes = gzOut.ToArray();
-                        }
-                        catch (Exception ex)
-                        {
-                            Log.Warning("AUTH-DEBUG RSP gzip decode failed for {Path}: {Ex}", path, ex.ToString());
-                        }
-                    }
-
-                    var respBody = Encoding.UTF8.GetString(logBytes);
-                    if (respBody.All(ch => ch >= 32 && ch != 127))
-                    {
-                        Log.Information("AUTH-DEBUG RSP Body: {Body}", respBody);
-                    }
-                    else
-                    {
-                        Log.Information("AUTH-DEBUG RSP Body (hex): {Hex}", Convert.ToHexString(logBytes));
-                    }
-                }
-
-                buffer.Position = 0;
-                await buffer.CopyToAsync(originalBody);
-            }
         });
 
         app.UseStaticFiles();

@@ -19,8 +19,19 @@ internal sealed class DeviceController : SolaceControllerBase
     {
         internal sealed record PropertiesR(
             string AuthMethod,
-            string RpsTicket,
-            string SiteName
+            string Id,
+            string? DeviceType,
+            string? Version,
+            ProofKeyR? ProofKey
+        );
+
+        internal sealed record ProofKeyR(
+            string Crv,
+            string Alg,
+            string Use,
+            string Kty,
+            string X,
+            string Y
         );
     }
 
@@ -39,7 +50,7 @@ internal sealed class DeviceController : SolaceControllerBase
         var tokenValidity = ValidityDatePair.Create(config.XboxLive.TokenValidityMinutes);
         var token = new Tokens.Xbox.DeviceToken()
         {
-            Did = "F700F376F3793B3A", // TODO
+            Did = request.Properties.Id,
         };
 
         return JsonPascalCase(new AuthenticateResponse(
