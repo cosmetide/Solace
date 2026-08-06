@@ -292,6 +292,7 @@ public static class Program
         {
             var liveDb = scope.ServiceProvider.GetRequiredService<LiveDbContext>();
             liveDb.Database.Migrate();
+            liveDb.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
         }
 
         Log.Information("Updated live db");
@@ -307,7 +308,7 @@ public static class Program
             .ConfigureAppConfiguration((hostingContext, config) =>
             {
                 config.AddInMemoryCollection([
-                    new("ConnectionStrings:LiveDBConnection", "Data Source=" + liveDbConnectionString)
+                    new("ConnectionStrings:LiveDBConnection", "Data Source=" + liveDbConnectionString + ";Default Timeout=30")
                 ]);
             })
             .ConfigureWebHostDefaults(webBuilder =>

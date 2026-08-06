@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Serilog;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Solace.ApiServer.Models;
 using Solace.ApiServer.Utils;
@@ -43,6 +44,14 @@ internal abstract class SolaceControllerBase : ControllerBase
 
     protected static ContentHttpResult JsonPascalCase(object value)
         => TypedResults.Content(JsonSerializer.Serialize(value), "application/json");
+
+    private static readonly JsonSerializerOptions jsonPascalCaseRelaxed = new()
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    protected static ContentHttpResult JsonPascalCaseRelaxed(object value)
+        => TypedResults.Content(JsonSerializer.Serialize(value, jsonPascalCaseRelaxed), "application/json");
 
     protected Union<Tokens.Xbox.XapiToken, Results<UnauthorizedHttpResult, BadRequest>> XboxLiveAuth()
     {

@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 using System.Buffers;
@@ -170,8 +171,16 @@ internal sealed partial class LoginController : SolaceControllerBase
             PasswordHash = paswordHash,
         };
 
-        _dbContext.Accounts.Add(account);
-        await _dbContext.SaveChangesAsync(cancellationToken);
+        try
+        {
+            _dbContext.Accounts.Add(account);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (SqliteException ex)
+        {
+            Log.Error(ex, "Failed to create account {Username}", username);
+            return TypedResults.BadRequest("Failed to create account, please try again");
+        }
 
         Log.Information($"Account created: {username} ({userId})");
 
@@ -201,10 +210,24 @@ internal sealed partial class LoginController : SolaceControllerBase
         [FromForm] string? state,
         [FromForm(Name = "client_id")] string? clientId,
         [FromForm] string? register,
+        [FromForm] string? firstName,
+        [FromForm] string? lastName,
         CancellationToken cancellationToken)
     {
         username = username.Trim();
         password = password.Trim();
+        firstName = firstName?.Trim();
+        lastName = lastName?.Trim();
+
+        if (firstName is { Length: 0 })
+        {
+            firstName = null;
+        }
+
+        if (lastName is { Length: 0 })
+        {
+            lastName = null;
+        }
 
         Log.Debug($"OAuth20 login attempt: Username: {username}, RedirectUri: {redirectUri}");
 
@@ -217,7 +240,7 @@ internal sealed partial class LoginController : SolaceControllerBase
                 return TypedResults.BadRequest("Username or password is incorrect");
             }
 
-            account = await CreateOAuthAccountAsync(username, password, cancellationToken);
+            account = await CreateOAuthAccountAsync(username, password, firstName, lastName, cancellationToken);
 
             if (account is null)
             {
@@ -333,7 +356,7 @@ internal sealed partial class LoginController : SolaceControllerBase
         return Convert.ToHexStringLower(buffer);
     }
 
-    private async Task<Account?> CreateOAuthAccountAsync(string username, string password, CancellationToken cancellationToken)
+    private async Task<Account?> CreateOAuthAccountAsync(string username, string password, string? firstName, string? lastName, CancellationToken cancellationToken)
     {
         if (username.Length is < 3 or > 16)
         {
@@ -341,6 +364,16 @@ internal sealed partial class LoginController : SolaceControllerBase
         }
 
         if (password.Length is < 4 or > 32)
+        {
+            return null;
+        }
+
+        if (firstName is not null && (firstName.Length is < 2 or > 100))
+        {
+            return null;
+        }
+
+        if (lastName is not null && (lastName.Length is < 2 or > 100))
         {
             return null;
         }
@@ -361,14 +394,22 @@ internal sealed partial class LoginController : SolaceControllerBase
             CreatedDate = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
             Username = username,
             ProfilePictureUrl = "images/default_pfp.png",
-            FirstName = null,
-            LastName = null,
+            FirstName = firstName,
+            LastName = lastName,
             PasswordSalt = passwordSalt,
             PasswordHash = passwordHash,
         };
 
-        _dbContext.Accounts.Add(account);
-        await _dbContext.SaveChangesAsync(cancellationToken);
+        try
+        {
+            _dbContext.Accounts.Add(account);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (SqliteException ex)
+        {
+            Log.Error(ex, "Failed to create OAuth20 account {Username}", username);
+            return null;
+        }
 
         Log.Information($"OAuth20 account created: {username} ({account.Id})");
 

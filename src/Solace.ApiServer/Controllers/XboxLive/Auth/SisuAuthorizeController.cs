@@ -84,7 +84,7 @@ internal sealed class SisuAuthorizeController : SolaceControllerBase
             tokenValidity
         );
 
-        return JsonPascalCase(new AuthorizeResponse(
+        return JsonPascalCaseRelaxed(new AuthorizeResponse(
             deviceTokenString,
             new Ticket(
                 tokenValidity.IssuedStr,
