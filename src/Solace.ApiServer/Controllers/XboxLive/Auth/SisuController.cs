@@ -64,7 +64,7 @@ internal sealed class SisuController : SolaceControllerBase
         Add("state", request.Query.State);
         Add("display", request.Query.Display);
 
-        string redirect = "https://login.live.com/oauth20_authorize.srf?"
+        string redirect = $"{Request.Scheme}://{Request.Host}/oauth20_authorize.srf?"
             + string.Join("&", queryParams.Select(pair => $"{Uri.EscapeDataString(pair.Key)}={Uri.EscapeDataString(pair.Value)}"));
 
         return JsonPascalCase(new AuthenticateResponse(redirect, new { }));
