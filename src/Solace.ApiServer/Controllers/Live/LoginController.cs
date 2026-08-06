@@ -356,7 +356,8 @@ internal sealed partial class LoginController : SolaceControllerBase
         string displayName = string.IsNullOrWhiteSpace(username)
             ? "Welcome back!"
             : $"Welcome back, {HttpUtility.HtmlEncode(username)}!";
-        string redirectJs = location.Replace("\\", "\\\\").Replace("'", "\\'");
+
+        Log.Debug($"OAuth20 logout: Location: {location}, User: {username}");
 
         string loginUri = "/oauth20_authorize.srf";
         var loginParams = new List<string>();
@@ -377,8 +378,6 @@ internal sealed partial class LoginController : SolaceControllerBase
             loginUri += "?" + string.Join("&", loginParams);
         }
         string loginJs = loginUri.Replace("\\", "\\\\").Replace("'", "\\'");
-
-        Log.Debug($"OAuth20 logout: Location: {location}, User: {username}");
 
         return TypedResults.Content($$"""
             <!DOCTYPE html>
@@ -423,7 +422,7 @@ internal sealed partial class LoginController : SolaceControllerBase
                 </div>
                 <script>
                     document.getElementById('letsGoBtn').addEventListener('click', function () {
-                        window.location.replace('{{redirectJs}}');
+                        window.location.href = '{{loginJs}}';
                     });
                     document.getElementById('switchBtn').addEventListener('click', function () {
                         window.location.href = '{{loginJs}}';

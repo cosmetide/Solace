@@ -78,9 +78,15 @@ internal sealed class SisuAuthorizeController : SolaceControllerBase
 
         string titleTokenString = JwtUtils.Sign<Tokens.Xbox.AuthToken>(titleToken, config.XboxLive.AuthTokenSecretBytes, tokenValidity);
 
-        string playfabTokenString = JwtUtils.Sign(
-            new Tokens.Shared.PlayfabXboxToken(ticket.UserId),
-            config.XboxLive.PlayfabTokenSecretBytes,
+        string authorizationTokenString = JwtUtils.Sign<Tokens.Xbox.AuthToken>(
+            new Tokens.Xbox.UserToken()
+            {
+                Xid = ticket.UserId,
+                Uhs = ticket.UserId,
+                UserId = ticket.UserId,
+                Username = ticket.Username,
+            },
+            config.XboxLive.AuthTokenSecretBytes,
             tokenValidity
         );
 
@@ -116,7 +122,7 @@ internal sealed class SisuAuthorizeController : SolaceControllerBase
             new Ticket(
                 tokenValidity.IssuedStr,
                 tokenValidity.ExpiresStr,
-                playfabTokenString,
+                authorizationTokenString,
                 new()
                 {
                     ["xui"] = new[]
