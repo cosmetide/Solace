@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 using Serilog.Events;
+using System.Text;
 using Solace.ApiServer.Authentication;
 using Solace.ApiServer.Utils;
 
@@ -85,6 +86,45 @@ public class Startup
                 diagnosticContext.Set("RemoteIpAddress", httpContext.Connection.RemoteIpAddress);
                 diagnosticContext.Set("RequestQuery", httpContext.Request.QueryString);
             };
+        });
+
+        app.Use(async (context, next) =>
+        {
+            var path = context.Request.Path.Value ?? string.Empty;
+            if (HttpMethods.IsPost(context.Request.Method)
+                && (path.Contains("xboxlive.com", StringComparison.OrdinalIgnoreCase)
+                    || path.EndsWith("oauth20_token.srf", StringComparison.OrdinalIgnoreCase)))
+            {
+                context.Request.EnableBuffering();
+                byte[] raw;
+                using (var ms = new MemoryStream())
+                {
+                    await context.Request.Body.CopyToAsync(ms);
+                    raw = ms.ToArray();
+                }
+                context.Request.Body.Position = 0;
+
+                var body = Encoding.UTF8.GetString(raw);
+                Log.Information("AUTH-DEBUG {Method} {Path}{Query} ContentType={ContentType} Length={Length}",
+                    context.Request.Method, path, context.Request.QueryString, context.Request.ContentType, raw.Length);
+
+                if (body.All(ch => ch >= 32 && ch != 127))
+                {
+                    Log.Information("AUTH-DEBUG Body: {Body}", body);
+                }
+                else
+                {
+                    Log.Information("AUTH-DEBUG Body (hex): {Hex}", Convert.ToHexString(raw));
+                    Log.Information("AUTH-DEBUG Body (printable): {Body}",
+                        string.Concat(body.Select(ch => ch >= 32 && ch != 127 ? ch : '?')));
+                }
+
+                await next();
+                Log.Information("AUTH-DEBUG {Path} -> {StatusCode}", path, context.Response.StatusCode);
+                return;
+            }
+
+            await next();
         });
 
         app.UseStaticFiles();
