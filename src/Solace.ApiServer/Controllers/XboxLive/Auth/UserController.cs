@@ -34,7 +34,14 @@ internal sealed class UserController : SolaceControllerBase
     [HttpPost]
     public Results<ContentHttpResult, UnauthorizedHttpResult> Authenticate([FromBody] AuthenticateRequest request)
     {
-        var ticket = JwtUtils.Verify<Tokens.Shared.XboxTicketToken>(request.Properties.RpsTicket, config.Login.XboxTokenSecretBytes)?.Data;
+        string? rpsTicket = request.Properties.RpsTicket;
+
+        if (rpsTicket is not null && rpsTicket.Length > 2 && (rpsTicket[0] is 'd' or 't') && rpsTicket[1] == '=')
+        {
+            rpsTicket = rpsTicket[2..];
+        }
+
+        var ticket = JwtUtils.Verify<Tokens.Shared.XboxTicketToken>(rpsTicket ?? string.Empty, config.Login.XboxTokenSecretBytes)?.Data;
 
         if (ticket is null)
         {
