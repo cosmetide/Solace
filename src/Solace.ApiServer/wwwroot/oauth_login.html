@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Minecraft Earth - Sign in</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+        @font-face { font-family: "Minecraft"; src: url("https://sqlylxcnoqehorlgmztm.supabase.co/storage/v1/object/public/icons/fonts/minecraftfive-regular.ttf") format("truetype"); font-weight: 400; font-style: normal; font-display: block; }
+        @font-face { font-family: "Minecraft"; src: url("https://sqlylxcnoqehorlgmztm.supabase.co/storage/v1/object/public/icons/fonts/minecraftfive-bold.ttf") format("truetype"); font-weight: 700; font-style: normal; font-display: block; }
+        @font-face { font-family: "MinecraftTen"; src: url("https://sqlylxcnoqehorlgmztm.supabase.co/storage/v1/object/public/icons/fonts/minecraftten.ttf") format("truetype"); font-weight: 400; font-style: normal; }
+        @font-face { font-family: "MinecraftSeven"; src: url("https://sqlylxcnoqehorlgmztm.supabase.co/storage/v1/object/public/icons/fonts/minecraftseven.ttf") format("truetype"); font-weight: 400; font-style: normal; }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: "Minecraft", sans-serif;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+            background: url("https://sqlylxcnoqehorlgmztm.supabase.co/storage/v1/object/public/icons/backgrounds/splash_screen.png") center center / cover no-repeat fixed;
+            image-rendering: pixelated;
+            -webkit-font-smoothing: none;
+        }
+
+        body::before {
+            content: ""; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.45); pointer-events: none; z-index: 0;
+        }
+
+        .container {
+            background: #f5eed9;
+            border-radius: 4px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), inset 0 0 0 4px #8b7355;
+            max-width: 420px;
+            width: 100%;
+            padding: 24px 30px 30px;
+            position: relative;
+            z-index: 1;
+            border: 4px solid #5a4a3a;
+            display: flex;
+            flex-direction: column;
+        }
+
+        h1 {
+            text-align: center; color: #6b8e23; margin-bottom: 5px; font-size: 2.2rem;
+            font-family: "MinecraftTen", "Minecraft", sans-serif; font-weight: 400;
+            text-transform: uppercase; letter-spacing: 2px;
+            text-shadow: 3px 3px 0 rgba(0, 0, 0, 0.2);
+            filter: drop-shadow(0 6px 12px rgba(107, 142, 35, 0.4));
+        }
+
+        .subtitle {
+            text-align: center; color: #5a4a3a; margin-bottom: 20px; font-size: 1rem;
+            font-family: "MinecraftTen", "Minecraft", sans-serif; font-weight: 600;
+        }
+
+        .bp-form-row { margin-bottom: 16px; width: 100%; }
+
+        .bp-form-row label {
+            display: block; font-weight: 700; color: #3e2723; margin-bottom: 6px;
+            font-size: 0.95rem; text-transform: uppercase; font-family: "Minecraft", sans-serif;
+        }
+
+        .bp-form-row input[type="text"], .bp-form-row input[type="password"] {
+            width: 100%; padding: 12px 14px; border: 3px solid #8b7355; border-radius: 2px;
+            background: #f5eed9; color: #3e2723; font-family: "Minecraft", sans-serif;
+            font-size: 1rem; font-weight: 600; outline: none; transition: border-color 0.15s;
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1); box-sizing: border-box;
+        }
+
+        .bp-form-row input:focus { border-color: #6b8e23; }
+
+        .required { color: red; }
+
+        .register-row {
+            display: flex; align-items: center; gap: 10px; margin-bottom: 6px;
+            color: #3e2723; font-size: 0.85rem; text-transform: uppercase;
+            font-family: "MinecraftSeven", "Minecraft", sans-serif; cursor: pointer;
+        }
+
+        .register-row input { width: 18px; height: 18px; accent-color: #6b8e23; }
+
+        .bp-submit-btn {
+            width: 100%; padding: 12px 8px; background: linear-gradient(180deg, #6b8e23 0%, #556b2f 100%);
+            color: white; border: 2px solid #4a5d23; border-radius: 2px; cursor: pointer;
+            font-weight: 700; font-size: 1rem; transition: all 0.15s;
+            box-shadow: 0 4px 0 #3d4f1c; text-transform: uppercase; font-family: "Minecraft", sans-serif;
+            margin-top: 10px; box-sizing: border-box;
+        }
+
+        .bp-submit-btn:hover {
+            background: linear-gradient(180deg, #7cb342 0%, #689f38 100%);
+            transform: translatey(-2px); box-shadow: 0 6px 0 #3d4f1c;
+        }
+
+        .bp-submit-btn:active {
+            transform: translatey(3px); box-shadow: 0 1px 0 #3d4f1c;
+        }
+
+        @media (max-width: 480px) {
+            .container { padding: 20px; }
+            h1 { font-size: 1.8rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Minecraft Earth</h1>
+        <p class="subtitle">Please sign in.</p>
+
+        <form id="oauthForm" action="oauth20_desktop.srf" method="post">
+            <input type="hidden" name="redirect_uri" id="hRedirectUri" value="" />
+            <input type="hidden" name="state" id="hState" value="" />
+            <input type="hidden" name="client_id" id="hClientId" value="" />
+
+            <div class="bp-form-row">
+                <label for="username">Username <span class="required">*</span></label>
+                <input id="username" name="username" type="text" placeholder="Username" required minlength="3" maxlength="16" pattern="[a-z0-9_:]+" title="Lowercase letters, numbers, underscore, and colon only" autocomplete="username" />
+            </div>
+
+            <div class="bp-form-row">
+                <label for="password">Password <span class="required">*</span></label>
+                <input id="password" name="password" type="password" placeholder="Password" required minlength="4" maxlength="32" autocomplete="current-password" />
+            </div>
+
+            <label class="register-row">
+                <input type="checkbox" name="register" value="true" id="registerCheck" />
+                <span>Create a new account</span>
+            </label>
+
+            <button type="submit" class="bp-submit-btn">Sign in</button>
+        </form>
+    </div>
+
+    <script>
+        (function () {
+            var params = new URLSearchParams(window.location.search);
+
+            var redirectUri = params.get('redirect_uri') || 'ms-xal-0000000040281e53://xbox-signedin';
+            document.getElementById('hRedirectUri').value = redirectUri;
+
+            var state = params.get('state');
+            if (state) {
+                document.getElementById('hState').value = state;
+            }
+
+            var clientId = params.get('client_id');
+            if (clientId) {
+                document.getElementById('hClientId').value = clientId;
+            }
+
+            document.getElementById('registerCheck').addEventListener('change', function () {
+                var title = document.querySelector('h1');
+                title.textContent = this.checked ? 'Create Account' : 'Minecraft Earth';
+            });
+        })();
+    </script>
+</body>
+</html>

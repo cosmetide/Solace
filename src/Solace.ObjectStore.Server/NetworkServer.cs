@@ -75,90 +75,97 @@ public sealed partial class NetworkServer : IDisposable
     {
         while (true)
         {
-            ReadResult result = await reader.ReadAsync();
-            ReadOnlySequence<byte> buffer = result.Buffer;
-
-            while (TryReadLine(ref buffer, out ReadOnlySequence<byte> line))
+            string commandLine;
+            while (true)
             {
-                string commandLine = Encoding.ASCII.GetString(line);
-                string[] parts = commandLine.Split(' ', 2);
+                ReadResult result = await reader.ReadAsync();
 
-                if (parts.Length < 2)
+                if (TryReadLine(result.Buffer, out ReadOnlySequence<byte> line, out SequencePosition restPosition))
                 {
-                    await WriteMessageAsync(writer, "ERR");
-                    continue;
+                    commandLine = Encoding.ASCII.GetString(line);
+                    reader.AdvanceTo(restPosition);
+                    break;
                 }
 
-                string cmd = parts[0].ToUpperInvariant();
-                string arg = parts[1];
+                reader.AdvanceTo(result.Buffer.Start, result.Buffer.End);
 
-                switch (cmd)
+                if (result.IsCompleted)
                 {
-                    case "STORE":
-                        if (int.TryParse(arg, out int length) && length >= 0)
-                        {
-                            reader.AdvanceTo(buffer.Start);
-
-                            var payloadResult = await reader.ReadAtLeastAsync(length);
-                            var payload = payloadResult.Buffer.Slice(0, length);
-
-                            string? id = await _server.StoreAsync(payload.ToArray());
-                            await WriteMessageAsync(writer, id != null ? $"OK {id}" : "ERR");
-
-                            buffer = payloadResult.Buffer.Slice(length);
-                        }
-
-                        break;
-                    case "GET":
-                        if (ValidateObjectId(arg))
-                        {
-                            byte[]? data = await _server.LoadAsync(arg);
-                            if (data != null)
-                            {
-                                await WriteMessageAsync(writer, $"OK {data.Length}");
-                                await writer.WriteAsync(data);
-                            }
-                            else
-                            {
-                                await WriteMessageAsync(writer, "ERR");
-                            }
-                        }
-
-                        break;
-                    case "DEL":
-                        bool deleted = await _server.DeleteAsync(arg);
-                        await WriteMessageAsync(writer, deleted ? "OK" : "ERR");
-                        break;
-                    default:
-                        await WriteMessageAsync(writer, "ERR");
-                        break;
+                    await reader.CompleteAsync();
+                    await writer.CompleteAsync();
+                    return;
                 }
             }
 
-            reader.AdvanceTo(buffer.Start, buffer.End);
+            string[] parts = commandLine.Split(' ', 2);
 
-            if (result.IsCompleted)
+            if (parts.Length < 2)
             {
-                break;
+                await WriteMessageAsync(writer, "ERR");
+                continue;
+            }
+
+            string cmd = parts[0].ToUpperInvariant();
+            string arg = parts[1];
+
+            switch (cmd)
+            {
+                case "STORE":
+                    if (int.TryParse(arg, out int length) && length >= 0)
+                    {
+                        byte[] payload = [];
+                        if (length > 0)
+                        {
+                            var payloadResult = await reader.ReadAtLeastAsync(length);
+                            payload = payloadResult.Buffer.Slice(0, length).ToArray();
+                            reader.AdvanceTo(payloadResult.Buffer.GetPosition(length));
+                        }
+
+                        string? id = await _server.StoreAsync(payload);
+                        await WriteMessageAsync(writer, id != null ? $"OK {id}" : "ERR");
+                    }
+
+                    break;
+                case "GET":
+                    if (ValidateObjectId(arg))
+                    {
+                        byte[]? data = await _server.LoadAsync(arg);
+                        if (data != null)
+                        {
+                            await WriteMessageAsync(writer, $"OK {data.Length}");
+                            await writer.WriteAsync(data);
+                        }
+                        else
+                        {
+                            await WriteMessageAsync(writer, "ERR");
+                        }
+                    }
+
+                    break;
+                case "DEL":
+                    bool deleted = await _server.DeleteAsync(arg);
+                    await WriteMessageAsync(writer, deleted ? "OK" : "ERR");
+                    break;
+                default:
+                    await WriteMessageAsync(writer, "ERR");
+                    break;
             }
         }
-
-        await reader.CompleteAsync();
-        await writer.CompleteAsync();
     }
 
-    private static bool TryReadLine(ref ReadOnlySequence<byte> buffer, out ReadOnlySequence<byte> line)
+    private static bool TryReadLine(ReadOnlySequence<byte> buffer, out ReadOnlySequence<byte> line, out SequencePosition rest)
     {
         SequencePosition? position = buffer.PositionOf((byte)'\n');
 
         if (position is null)
         {
             line = default;
+            rest = buffer.Start;
             return false;
         }
 
         line = buffer.Slice(0, position.Value);
-        buffer = buffer.Slice(buffer.GetPosition(1, position.Value));
+        rest = buffer.GetPosition(1, position.Value);
         return true;
     }
 

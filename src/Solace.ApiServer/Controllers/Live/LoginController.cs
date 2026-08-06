@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
@@ -22,6 +23,12 @@ internal sealed partial class LoginController : SolaceControllerBase
     private static readonly RandomNumberGenerator _rng = RandomNumberGenerator.Create();
 
     private static Config config => Program.config;
+
+    private static readonly ConcurrentDictionary<string, OAuthCode> _oauthCodes = new(StringComparer.Ordinal);
+
+    private sealed record OAuthCode(string UserId, string Username, string RedirectUri, string ClientId, long ExpiresAtUnixSeconds);
+
+    private sealed record OAuthIdToken(string Sub, string Name, string PreferredUsername) : ITokenData<OAuthIdToken>;
 
     private readonly LiveDbContext _dbContext;
 
@@ -180,6 +187,193 @@ internal sealed partial class LoginController : SolaceControllerBase
         => TypedResults.Content("""
             <DeviceAddResponse Success="true"><success>true</success><puid>0</puid></DeviceAddResponse>
             """);
+
+    [HttpGet("oauth20_desktop.srf")]
+    [HttpGet("oauth20_authorize.srf")]
+    public VirtualFileHttpResult GetOAuthLoginPage()
+        => TypedResults.VirtualFile("/oauth_login.html", "text/html");
+
+    [HttpPost("oauth20_desktop.srf")]
+    public async Task<Results<RedirectHttpResult, ContentHttpResult, BadRequest<string>>> OAuthLogin(
+        [FromForm] string username,
+        [FromForm] string password,
+        [FromForm(Name = "redirect_uri")] string? redirectUri,
+        [FromForm] string? state,
+        [FromForm(Name = "client_id")] string? clientId,
+        [FromForm] string? register,
+        CancellationToken cancellationToken)
+    {
+        username = username.Trim();
+        password = password.Trim();
+
+        Log.Debug($"OAuth20 login attempt: Username: {username}, RedirectUri: {redirectUri}");
+
+        var account = await _dbContext.Accounts.FirstOrDefaultAsync(account => account.Username == username, cancellationToken);
+
+        if (account is null)
+        {
+            if (register is not { Length: > 0 })
+            {
+                return TypedResults.BadRequest("Username or password is incorrect");
+            }
+
+            account = await CreateOAuthAccountAsync(username, password, cancellationToken);
+
+            if (account is null)
+            {
+                return TypedResults.BadRequest("Username must be 3-16 characters long and password must be 4-32 characters long");
+            }
+        }
+        else
+        {
+            byte[] passwordHash = HashPassword(password, account.PasswordSalt);
+
+            if (!passwordHash.AsSpan().SequenceEqual(account.PasswordHash))
+            {
+                return TypedResults.BadRequest("Username or password is incorrect");
+            }
+        }
+
+        string code = GenerateOAuthCode();
+        string target = string.IsNullOrWhiteSpace(redirectUri) ? "ms-xal-0000000040281e53://xbox-signedin" : redirectUri.Trim();
+
+        _oauthCodes[code] = new OAuthCode(account.Id, account.Username, target, clientId ?? string.Empty, DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeSeconds());
+
+        string query = $"code={code}";
+        if (!string.IsNullOrWhiteSpace(state))
+        {
+            query += $"&state={Uri.EscapeDataString(state)}";
+        }
+
+        return TypedResults.Redirect($"{target}{(target.Contains('?') ? "&" : "?")}{query}");
+    }
+
+    [HttpPost("oauth20_token.srf")]
+#pragma warning disable IDE0060 // Remove unused parameter
+    public ContentHttpResult OAuthToken(
+        [FromForm(Name = "grant_type")] string grantType,
+        [FromForm(Name = "code")] string? code,
+        [FromForm(Name = "client_id")] string? clientId,
+        [FromForm(Name = "client_secret")] string? clientSecret,
+        [FromForm(Name = "redirect_uri")] string? redirectUri,
+        [FromForm(Name = "scope")] string? scope,
+        [FromForm(Name = "refresh_token")] string? refreshToken)
+#pragma warning restore IDE0060 // Remove unused parameter
+    {
+        Log.Debug($"OAuth20 token request: GrantType: {grantType}, ClientId: {clientId}");
+
+        switch (grantType)
+        {
+            case "authorization_code":
+                {
+                    if (code is null || !_oauthCodes.TryRemove(code, out OAuthCode? oauthCode))
+                    {
+                        return TypedResults.Content("""{"error":"invalid_grant"}""", "application/json", statusCode: 400);
+                    }
+
+                    if (DateTimeOffset.UtcNow.ToUnixTimeSeconds() > oauthCode.ExpiresAtUnixSeconds)
+                    {
+                        return TypedResults.Content("""{"error":"invalid_grant"}""", "application/json", statusCode: 400);
+                    }
+
+                    return CreateOAuthTokenResponse(oauthCode.UserId, oauthCode.Username, scope);
+                }
+
+            case "refresh_token":
+                {
+                    if (refreshToken is null)
+                    {
+                        return TypedResults.Content("""{"error":"invalid_grant"}""", "application/json", statusCode: 400);
+                    }
+
+                    var refreshData = JwtUtils.Verify<Tokens.Shared.XboxTicketToken>(refreshToken, config.Login.XboxTokenSecretBytes)?.Data;
+
+                    if (refreshData is null)
+                    {
+                        return TypedResults.Content("""{"error":"invalid_grant"}""", "application/json", statusCode: 400);
+                    }
+
+                    return CreateOAuthTokenResponse(refreshData.UserId, refreshData.Username, scope);
+                }
+
+            default:
+                return TypedResults.Content("""{"error":"unsupported_grant_type"}""", "application/json", statusCode: 400);
+        }
+    }
+
+    [HttpGet("oauth20_logout.srf")]
+    [HttpPost("oauth20_logout.srf")]
+    public ContentHttpResult OAuthLogout()
+        => TypedResults.Content("", "text/html");
+
+    private static ContentHttpResult CreateOAuthTokenResponse(string userId, string username, string? scope)
+    {
+        var tokenValidity = ValidityDatePair.Create(config.Login.XboxTokenValidityMinutes);
+        string accessToken = JwtUtils.Sign(new Tokens.Shared.XboxTicketToken(userId, username), config.Login.XboxTokenSecretBytes, tokenValidity);
+
+        var idTokenValidity = ValidityDatePair.Create(config.Login.UserTokenValidityMinutes);
+        string idToken = JwtUtils.Sign(new OAuthIdToken(userId, username, username), config.Login.UserTokenSecretBytes, idTokenValidity);
+
+        return JsonCamelCase(new Dictionary<string, object?>()
+        {
+            ["access_token"] = accessToken,
+            ["token_type"] = "bearer",
+            ["expires_in"] = (long)tokenValidity.Expires.Subtract(tokenValidity.Issued).TotalSeconds,
+            ["refresh_token"] = accessToken,
+            ["scope"] = string.IsNullOrWhiteSpace(scope) ? "service::user.auth.xboxlive.com::MBI_SSL" : scope,
+            ["id_token"] = idToken,
+            ["user_id"] = userId,
+        });
+    }
+
+    private static string GenerateOAuthCode()
+    {
+        Span<byte> buffer = stackalloc byte[24];
+        _rng.GetBytes(buffer);
+        return Convert.ToHexStringLower(buffer);
+    }
+
+    private async Task<Account?> CreateOAuthAccountAsync(string username, string password, CancellationToken cancellationToken)
+    {
+        if (username.Length is < 3 or > 16)
+        {
+            return null;
+        }
+
+        if (password.Length is < 4 or > 32)
+        {
+            return null;
+        }
+
+        if (!GetUsernameRegex().IsMatch(username))
+        {
+            return null;
+        }
+
+        byte[] passwordSalt = new byte[16];
+        _rng.GetBytes(passwordSalt);
+
+        byte[] passwordHash = HashPassword(password, passwordSalt);
+
+        var account = new Account()
+        {
+            Id = GenerateUserId(username),
+            CreatedDate = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            Username = username,
+            ProfilePictureUrl = "images/default_pfp.png",
+            FirstName = null,
+            LastName = null,
+            PasswordSalt = passwordSalt,
+            PasswordHash = passwordHash,
+        };
+
+        _dbContext.Accounts.Add(account);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        Log.Information($"OAuth20 account created: {username} ({account.Id})");
+
+        return account;
+    }
 
     [HttpPost("RST2.srf")]
     public async Task<Results<ContentHttpResult, BadRequest>> RST2()
