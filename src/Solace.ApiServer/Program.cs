@@ -1,6 +1,9 @@
 using CommandLine;
+using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
+using System.Net;
+using System.Security.Cryptography.X509Certificates;
 using Serilog.Events;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -37,6 +40,15 @@ public static class Program
     {
         [Option("port", Default = 80, Required = false, HelpText = "Port to listen on")]
         public int HttpPort { get; set; }
+
+        [Option("https-port", Default = null, Required = false, HelpText = "Port to listen on for HTTPS")]
+        public int? HttpsPort { get; set; }
+
+        [Option("https-cert", Default = "./https/solace.pfx", Required = false, HelpText = "HTTPS certificate (PFX) path")]
+        public string HttpsCertificatePath { get; set; }
+
+        [Option("https-cert-password", Default = "", Required = false, HelpText = "HTTPS certificate password")]
+        public string HttpsCertificatePassword { get; set; }
 
         [Option("earth-db", Default = "./earth.db", Required = false, HelpText = "Earth database connection string")]
         public string EarthDatabaseConnectionString { get; set; }
@@ -273,7 +285,7 @@ public static class Program
 
         BuildplateInstanceRequestHandler.Start(DB, eventBus, objectStore, staticData.Catalog);
 
-        var host = CreateHostBuilder(args, options.HttpPort, options.LiveDatabaseConnectionString).Build();
+        var host = CreateHostBuilder(args, options.HttpPort, options.LiveDatabaseConnectionString, options.HttpsPort, options.HttpsCertificatePath, options.HttpsCertificatePassword).Build();
 
         Log.Information("Updating live db");
         using (var scope = host.Services.CreateScope())
@@ -289,7 +301,7 @@ public static class Program
         return 0;
     }
 
-    public static IHostBuilder CreateHostBuilder(string[] args, int httpPort, string liveDbConnectionString)
+    public static IHostBuilder CreateHostBuilder(string[] args, int httpPort, string liveDbConnectionString, int? httpsPort, string httpsCertPath, string httpsCertPassword)
         => Host.CreateDefaultBuilder(args)
             .UseSerilog()
             .ConfigureAppConfiguration((hostingContext, config) =>
@@ -301,7 +313,32 @@ public static class Program
             .ConfigureWebHostDefaults(webBuilder =>
             {
                 webBuilder.UseStartup<Startup>();
-                webBuilder.UseUrls($"http://*:{httpPort}/");
+                webBuilder.UseKestrel(kestrel =>
+                {
+                    kestrel.Listen(IPAddress.Any, httpPort);
+
+                    if (!File.Exists(httpsCertPath))
+                    {
+                        if (httpsPort is not null)
+                        {
+                            Log.Warning($"HTTPS was requested on port {httpsPort} but certificate file '{httpsCertPath}' was not found; continuing HTTP-only");
+                        }
+
+                        return;
+                    }
+
+                    int hPort = httpsPort ?? 8443;
+                    X509Certificate2 certificate = httpsCertPassword.Length == 0
+                        ? X509CertificateLoader.LoadPkcs12FromFile(httpsCertPath, null)
+                        : X509CertificateLoader.LoadPkcs12FromFile(httpsCertPath, httpsCertPassword);
+
+                    kestrel.Listen(IPAddress.Any, hPort, listenOptions =>
+                    {
+                        listenOptions.UseHttps(certificate);
+                    });
+
+                    Log.Information($"HTTPS endpoint listening on port {hPort} using certificate '{httpsCertPath}'");
+                });
             });
 
     public static async Task<ObjectStoreClient> GetObjectStoreClient()
