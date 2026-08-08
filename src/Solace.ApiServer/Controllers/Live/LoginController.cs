@@ -27,6 +27,8 @@ internal sealed partial class LoginController : SolaceControllerBase
 
     private static readonly ConcurrentDictionary<string, OAuthCode> _oauthCodes = new(StringComparer.Ordinal);
 
+    private static readonly ConcurrentDictionary<string, string> _signInStates = new(StringComparer.Ordinal);
+
     private sealed record OAuthCode(string UserId, string Username, string RedirectUri, string ClientId, long ExpiresAtUnixSeconds);
 
     private sealed record OAuthIdToken(string Sub, string Name, string PreferredUsername) : ITokenData<OAuthIdToken>;
@@ -199,8 +201,17 @@ internal sealed partial class LoginController : SolaceControllerBase
 
     [HttpGet("oauth20_desktop.srf")]
     [HttpGet("oauth20_authorize.srf")]
-    public VirtualFileHttpResult GetOAuthLoginPage()
-        => TypedResults.VirtualFile("/oauth_login.html", "text/html");
+    public VirtualFileHttpResult GetOAuthLoginPage([FromQuery] string? state)
+    {
+        if (state is { Length: > 0 })
+        {
+            _signInStates[state] = HttpContext.Request.Cookies["solace_user"] ?? string.Empty;
+        }
+
+        Log.Debug($"OAuth20 authorize page: State: {(state is { Length: > 0 } ? state : "(none)")}, Cookie: {HttpContext.Request.Headers.Cookie}");
+
+        return TypedResults.VirtualFile("/oauth_login.html", "text/html");
+    }
 
     [HttpPost("oauth20_desktop.srf")]
     public async Task<Results<StatusCodeHttpResult, ContentHttpResult, BadRequest<string>>> OAuthLogin(
@@ -343,10 +354,10 @@ internal sealed partial class LoginController : SolaceControllerBase
         [FromQuery(Name = "redirect_uri")] string? redirectUri,
         [FromQuery] string? state,
         [FromQuery(Name = "client_id")] string? clientId,
+        [FromQuery] string? code,
+        [FromQuery] string? lc,
         CancellationToken cancellationToken)
     {
-        string target = string.IsNullOrWhiteSpace(redirectUri) ? "ms-xal-0000000040281e53://auth" : redirectUri.Trim();
-
         string username = HttpContext.Request.Cookies["solace_user"] ?? string.Empty;
         string userId = string.Empty;
         if (username.Length > 0)
@@ -355,14 +366,11 @@ internal sealed partial class LoginController : SolaceControllerBase
             userId = account?.Id ?? string.Empty;
         }
 
-        string code = GenerateOAuthCode();
-        _oauthCodes[code] = new OAuthCode(userId, username, target, clientId ?? string.Empty, DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeSeconds());
+        bool knownState = state is not null && _signInStates.ContainsKey(state);
 
-        string location = $"{target}{(target.Contains('?') ? "&" : "?")}code={code}";
-        if (!string.IsNullOrWhiteSpace(state))
-        {
-            location += $"&state={Uri.EscapeDataString(state)}";
-        }
+        Log.Debug($"OAuth20 logout request: ClientId: {clientId}, RedirectUri: {redirectUri}, State: {state}, Code: {code}, Lc: {lc}, Cookie: {HttpContext.Request.Headers.Cookie}, User: {username} ({userId}), KnownSignInState: {knownState}");
+
+        string location = "ms-xal-0000000040281E53://auth/?lc=1033";
 
         Log.Debug($"OAuth20 logout: Location: {location}, User: {username}");
 
