@@ -90,6 +90,21 @@ internal sealed class SisuAuthorizeController : SolaceControllerBase
             tokenValidity
         );
 
+        var xui = new[]
+        {
+            new Dictionary<string, string>()
+            {
+                ["xid"] = userToken.Xid,
+                ["uhs"] = userToken.Uhs,
+
+                ["gtg"] = userToken.Username,
+                ["agg"] = "Adult",
+
+                ["usr"] = "185 190 234",
+                ["prv"] = "184 186 187 188 191 193 195 196 198 199 200 201 203 204 205 206 208 211 217 220 224 227 228 235 238 245 247 249 252 254 255",
+            },
+        };
+
         return JsonPascalCaseRelaxed(new AuthorizeResponse(
             deviceTokenString,
             new Ticket(
@@ -98,13 +113,7 @@ internal sealed class SisuAuthorizeController : SolaceControllerBase
                 userTokenString,
                 new()
                 {
-                    ["xui"] = new[]
-                    {
-                        new Dictionary<string, string>()
-                        {
-                            ["uhs"] = userToken.Uhs,
-                        },
-                    },
+                    ["xui"] = xui,
                 }
             ),
             new Ticket(
@@ -125,13 +134,7 @@ internal sealed class SisuAuthorizeController : SolaceControllerBase
                 authorizationTokenString,
                 new()
                 {
-                    ["xui"] = new[]
-                    {
-                        new Dictionary<string, string>()
-                        {
-                            ["uhs"] = ticket.UserId,
-                        },
-                    },
+                    ["xui"] = xui,
                 }
             ),
             request.Sandbox is { Length: > 0 } ? request.Sandbox : "RETAIL",
