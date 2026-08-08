@@ -339,14 +339,31 @@ internal sealed partial class LoginController : SolaceControllerBase
 
     [HttpGet("oauth20_logout.srf")]
     [HttpPost("oauth20_logout.srf")]
-    public IResult OAuthLogout(
+    public async Task<IResult> OAuthLogout(
         [FromQuery(Name = "redirect_uri")] string? redirectUri,
         [FromQuery] string? state,
-        [FromQuery(Name = "client_id")] string? clientId)
+        [FromQuery(Name = "client_id")] string? clientId,
+        CancellationToken cancellationToken)
     {
-        const string location = "ms-xal-0000000040281e53://auth/?lc=1033";
+        string target = string.IsNullOrWhiteSpace(redirectUri) ? "ms-xal-0000000040281e53://auth" : redirectUri.Trim();
 
         string username = HttpContext.Request.Cookies["solace_user"] ?? string.Empty;
+        string userId = string.Empty;
+        if (username.Length > 0)
+        {
+            var account = await _dbContext.Accounts.FirstOrDefaultAsync(account => account.Username == username, cancellationToken);
+            userId = account?.Id ?? string.Empty;
+        }
+
+        string code = GenerateOAuthCode();
+        _oauthCodes[code] = new OAuthCode(userId, username, target, clientId ?? string.Empty, DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeSeconds());
+
+        string location = $"{target}{(target.Contains('?') ? "&" : "?")}code={code}";
+        if (!string.IsNullOrWhiteSpace(state))
+        {
+            location += $"&state={Uri.EscapeDataString(state)}";
+        }
+
         Log.Debug($"OAuth20 logout: Location: {location}, User: {username}");
 
         HttpContext.Response.StatusCode = StatusCodes.Status302Found;
