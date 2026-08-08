@@ -339,7 +339,7 @@ internal sealed partial class LoginController : SolaceControllerBase
 
     [HttpGet("oauth20_logout.srf")]
     [HttpPost("oauth20_logout.srf")]
-    public ContentHttpResult OAuthLogout(
+    public IResult OAuthLogout(
         [FromQuery(Name = "redirect_uri")] string? redirectUri,
         [FromQuery] string? state,
         [FromQuery(Name = "client_id")] string? clientId)
@@ -353,84 +353,9 @@ internal sealed partial class LoginController : SolaceControllerBase
         }
 
         string username = HttpContext.Request.Cookies["solace_user"] ?? string.Empty;
-        string displayName = string.IsNullOrWhiteSpace(username)
-            ? "Welcome back!"
-            : $"Welcome back, {HttpUtility.HtmlEncode(username)}!";
-
         Log.Debug($"OAuth20 logout: Location: {location}, User: {username}");
 
-        string loginUri = "/oauth20_authorize.srf";
-        var loginParams = new List<string>();
-        if (!string.IsNullOrWhiteSpace(target))
-        {
-            loginParams.Add($"redirect_uri={Uri.EscapeDataString(target)}");
-        }
-        if (!string.IsNullOrWhiteSpace(state))
-        {
-            loginParams.Add($"state={Uri.EscapeDataString(state)}");
-        }
-        if (!string.IsNullOrWhiteSpace(clientId))
-        {
-            loginParams.Add($"client_id={Uri.EscapeDataString(clientId)}");
-        }
-        if (loginParams.Count > 0)
-        {
-            loginUri += "?" + string.Join("&", loginParams);
-        }
-        string loginJs = loginUri.Replace("\\", "\\\\").Replace("'", "\\'");
-
-        return TypedResults.Content($$"""
-            <!DOCTYPE html>
-            <html lang="en">
-            <head>
-                <meta charset="utf-8" />
-                <meta name="viewport" content="width=device-width, initial-scale=1" />
-                <title>Sign-in complete</title>
-                <style>
-                    body {
-                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                        background: #f5f5f7;
-                        color: #1d1d1f;
-                        margin: 0;
-                        height: 100vh;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                    }
-                    .card { text-align: center; max-width: 360px; }
-                    h1 { font-size: 24px; font-weight: 600; margin: 0 0 8px; }
-                    p { font-size: 15px; color: #6e6e73; margin: 0 0 28px; }
-                    .btn {
-                        display: block; width: 100%; box-sizing: border-box;
-                        padding: 14px 16px; font-size: 16px; font-weight: 600;
-                        border: none; border-radius: 12px; cursor: pointer;
-                        background: #6b8e23; color: #fff; margin-bottom: 16px;
-                    }
-                    .btn:active { transform: scale(0.98); }
-                    .link {
-                        display: inline-block; font-size: 14px; color: #0071e3;
-                        text-decoration: none; cursor: pointer; background: none; border: none;
-                    }
-                </style>
-            </head>
-            <body>
-                <div class="card">
-                    <h1>{{displayName}}</h1>
-                    <p>You're signed in. Ready to play?</p>
-                    <button type="button" id="letsGoBtn" class="btn">Let's Go</button>
-                    <button type="button" id="switchBtn" class="link">Sign in with a different account</button>
-                </div>
-                <script>
-                    document.getElementById('letsGoBtn').addEventListener('click', function () {
-                        window.location.href = '{{loginJs}}';
-                    });
-                    document.getElementById('switchBtn').addEventListener('click', function () {
-                        window.location.href = '{{loginJs}}';
-                    });
-                </script>
-            </body>
-            </html>
-            """, "text/html");
+        return TypedResults.Redirect(location);
     }
 
     private static ContentHttpResult CreateOAuthTokenResponse(string userId, string username, string? scope)
