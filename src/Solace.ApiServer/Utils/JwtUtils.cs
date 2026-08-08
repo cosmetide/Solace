@@ -1,8 +1,11 @@
-﻿using Microsoft.IdentityModel.Tokens;
+﻿using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.IdentityModel.Tokens;
 using Serilog;
 using System.Diagnostics;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Solace.ApiServer.Models;
 using Solace.Common;
@@ -20,6 +23,48 @@ internal static class JwtUtils
     public static string Sign<TData>(TData data, byte[] secret, ValidityDatePair validity)
         where TData : ITokenData<TData>
         => SignInternal<TData>(data, secret, validity);
+
+    public static string SignXboxUserToken(Tokens.Xbox.UserToken user, byte[] secret, ValidityDatePair validity)
+    {
+        var xui = new[]
+        {
+            new Dictionary<string, object?>()
+            {
+                ["xid"] = user.Xid,
+                ["uhs"] = user.Uhs,
+                ["gtg"] = user.Username,
+                ["agg"] = "Adult",
+                ["usr"] = "185 190 234",
+                ["prv"] = "184 186 187 188 191 193 195 196 198 199 200 201 203 204 205 206 208 211 217 220 224 227 228 235 238 245 247 249 252 254 255",
+            },
+        };
+
+        string headerJson = Json.Serialize(new { alg = "HS256", typ = "JWT" });
+        string payloadJson = Json.Serialize(new Dictionary<string, object?>()
+        {
+            ["iat"] = validity.Issued.ToUnixTimeSeconds(),
+            ["nbf"] = validity.Issued.ToUnixTimeSeconds(),
+            ["exp"] = validity.Expires.ToUnixTimeSeconds(),
+            ["data"] = Json.Serialize<Tokens.Xbox.AuthToken>(user),
+            ["xid"] = user.Xid,
+            ["uhs"] = user.Uhs,
+            ["gtg"] = user.Username,
+            ["agg"] = "Adult",
+            ["usr"] = "185 190 234",
+            ["prv"] = "184 186 187 188 191 193 195 196 198 199 200 201 203 204 205 206 208 211 217 220 224 227 228 235 238 245 247 249 252 254 255",
+            ["xui"] = xui,
+        });
+
+        byte[] headerBytes = Encoding.UTF8.GetBytes(headerJson);
+        byte[] payloadBytes = Encoding.UTF8.GetBytes(payloadJson);
+
+        string headerAndPayload = WebEncoders.Base64UrlEncode(headerBytes) + "." + WebEncoders.Base64UrlEncode(payloadBytes);
+
+        using var hmac = new HMACSHA256(secret);
+        string signature = WebEncoders.Base64UrlEncode(hmac.ComputeHash(Encoding.UTF8.GetBytes(headerAndPayload)));
+
+        return headerAndPayload + "." + signature;
+    }
 
     private static string SignInternal<TData>(object dataOrToken, byte[] secret, ValidityDatePair validity)
         where TData : ITokenData<TData>

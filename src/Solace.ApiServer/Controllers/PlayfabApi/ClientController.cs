@@ -171,6 +171,6 @@ internal sealed partial class ClientController : SolaceControllerBase
             }
         ));
 
-    [GeneratedRegex("^[0-9A-F]{16}-(.*)$")]
+    [GeneratedRegex("^(?:[0-9A-F]{16}|[0-9]{1,20})-(.*)$")]
     private static partial Regex GetAuthRegex();
 }

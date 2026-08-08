@@ -6,6 +6,7 @@ using Serilog;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -962,7 +963,7 @@ internal sealed partial class LoginController : SolaceControllerBase
         Span<byte> usernameHash = stackalloc byte[32];
         SHA256.HashData(usernameUTF8, usernameHash);
 
-        return Convert.ToHexStringLower(usernameHash[..8]);
+        return ulong.Parse(Convert.ToHexStringLower(usernameHash[..8]), NumberStyles.HexNumber).ToString();
     }
 
     private static byte[] HashPassword(string password, byte[] salt)

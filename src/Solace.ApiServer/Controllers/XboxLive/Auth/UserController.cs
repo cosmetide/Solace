@@ -61,7 +61,7 @@ internal sealed class UserController : SolaceControllerBase
         return JsonPascalCase(new AuthenticateResponse(
             tokenValidity.IssuedStr,
             tokenValidity.ExpiresStr,
-            JwtUtils.Sign<Tokens.Xbox.AuthToken>(token, config.XboxLive.AuthTokenSecretBytes, tokenValidity),
+            JwtUtils.SignXboxUserToken(token, config.XboxLive.AuthTokenSecretBytes, tokenValidity),
             new()
             {
                 ["xui"] = [
