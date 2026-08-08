@@ -370,7 +370,13 @@ internal sealed partial class LoginController : SolaceControllerBase
 
         Log.Debug($"OAuth20 logout request: ClientId: {clientId}, RedirectUri: {redirectUri}, State: {state}, Code: {code}, Lc: {lc}, Cookie: {HttpContext.Request.Headers.Cookie}, User: {username} ({userId}), KnownSignInState: {knownState}");
 
-        string location = "ms-xal-0000000040281E53://auth/?lc=1033";
+        string query = "lc=1033";
+        if (!string.IsNullOrWhiteSpace(state))
+        {
+            query += $"&state={Uri.EscapeDataString(state)}";
+        }
+
+        string location = $"ms-xal-0000000040281E53://auth/?{query}";
 
         Log.Debug($"OAuth20 logout: Location: {location}, User: {username}");
 
