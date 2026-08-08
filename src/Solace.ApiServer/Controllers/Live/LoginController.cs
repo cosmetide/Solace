@@ -346,16 +346,10 @@ internal sealed partial class LoginController : SolaceControllerBase
     {
         string target = string.IsNullOrWhiteSpace(redirectUri) ? "ms-xal-0000000040281e53://auth" : redirectUri.Trim();
 
-        string location = target;
-        if (!string.IsNullOrWhiteSpace(state))
-        {
-            location += (location.Contains('?') ? "&" : "?") + $"state={Uri.EscapeDataString(state)}";
-        }
-
         string username = HttpContext.Request.Cookies["solace_user"] ?? string.Empty;
-        Log.Debug($"OAuth20 logout: Location: {location}, User: {username}");
+        Log.Debug($"OAuth20 logout: Location: {target}, User: {username}");
 
-        return TypedResults.Redirect(location);
+        return TypedResults.Redirect(target);
     }
 
     private static ContentHttpResult CreateOAuthTokenResponse(string userId, string username, string? scope)
