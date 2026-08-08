@@ -296,7 +296,7 @@ internal sealed partial class LoginController : SolaceControllerBase
         [FromForm(Name = "refresh_token")] string? refreshToken)
 #pragma warning restore IDE0060 // Remove unused parameter
     {
-        Log.Debug($"OAuth20 token request: GrantType: {grantType}, ClientId: {clientId}");
+        Log.Debug($"OAuth20 token request: GrantType: {grantType}, ClientId: {clientId}, Code: {code}, RedirectUri: {redirectUri}, Scope: {scope}");
 
         switch (grantType)
         {

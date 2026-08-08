@@ -7,6 +7,7 @@ using Serilog;
 using Serilog.Events;
 using Solace.ApiServer.Authentication;
 using Solace.ApiServer.Utils;
+using System.Text;
 
 namespace Solace.ApiServer;
 
@@ -66,6 +67,29 @@ public class Startup
         app.Use(async (context, next) =>
         {
             context.Items.Add("RequestStartedOn", DateTimeOffset.UtcNow);
+            await next();
+        });
+
+        app.Use(async (context, next) =>
+        {
+            string path = $"{context.Request.Path}{context.Request.QueryString}";
+            string host = context.Request.Host.Value;
+            string ct = context.Request.ContentType ?? "null";
+
+            if (context.Request.Method is "POST" or "PUT" or "PATCH")
+            {
+                context.Request.EnableBuffering();
+                using var reader = new StreamReader(context.Request.Body, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+                string body = await reader.ReadToEndAsync();
+                context.Request.Body.Position = 0;
+                string shown = body.Length > 2000 ? $"{body[..2000]}...({body.Length})" : body;
+                Log.Information($"REQ {context.Request.Method} {path} Host={host} CT={ct} Body=[{shown}]");
+            }
+            else
+            {
+                Log.Information($"REQ {context.Request.Method} {path} Host={host} CT={ct}");
+            }
+
             await next();
         });
 
