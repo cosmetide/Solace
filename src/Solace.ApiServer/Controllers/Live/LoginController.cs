@@ -29,6 +29,8 @@ internal sealed partial class LoginController : SolaceControllerBase
 
     private static readonly ConcurrentDictionary<string, string> _signInStates = new(StringComparer.Ordinal);
 
+    private static string? _latestSignInState;
+
     private sealed record OAuthCode(string UserId, string Username, string RedirectUri, string ClientId, long ExpiresAtUnixSeconds);
 
     private sealed record OAuthIdToken(string Sub, string Name, string PreferredUsername) : ITokenData<OAuthIdToken>;
@@ -206,6 +208,7 @@ internal sealed partial class LoginController : SolaceControllerBase
         if (state is { Length: > 0 })
         {
             _signInStates[state] = HttpContext.Request.Cookies["solace_user"] ?? string.Empty;
+            _latestSignInState = state;
         }
 
         Log.Debug($"OAuth20 authorize page: State: {(state is { Length: > 0 } ? state : "(none)")}, Cookie: {HttpContext.Request.Headers.Cookie}");
@@ -371,9 +374,9 @@ internal sealed partial class LoginController : SolaceControllerBase
         Log.Debug($"OAuth20 logout request: ClientId: {clientId}, RedirectUri: {redirectUri}, State: {state}, Code: {code}, Lc: {lc}, Cookie: {HttpContext.Request.Headers.Cookie}, User: {username} ({userId}), KnownSignInState: {knownState}");
 
         string query = "lc=1033";
-        if (!string.IsNullOrWhiteSpace(state))
+        if (!string.IsNullOrWhiteSpace(_latestSignInState ?? state))
         {
-            query += $"&state={Uri.EscapeDataString(state)}";
+            query += $"&state={Uri.EscapeDataString(_latestSignInState ?? state)}";
         }
 
         string location = $"ms-xal-0000000040281E53://auth/?{query}";
