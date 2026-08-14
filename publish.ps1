@@ -72,7 +72,7 @@ $originalPath = Get-Location
 $launcherDir = Join-Path $PSScriptRoot "launcher"
 
 $isWin = if ($null -ne $IsWindows) { $IsWindows } else { [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT }
-$isMac = if ($null -ne $IsMacOS) { $IsMacOS } else { [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::OSX) }
+$isMac = if ($null -ne $IsMacOS) { $IsMacOS } else { [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::MacOSX }
 $isLin = if ($null -ne $IsLinux) { $IsLinux } else { [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Unix -and -not $isMac }
 
 try {
@@ -83,7 +83,7 @@ try {
         $Host.UI.RawUI.WindowTitle = "Solace Launcher"
 
         $fullPath = Join-Path $launcherDir "Launcher.exe"
-        $launcher = Start-Process -FilePath $fullPath -ArgumentList $args -PassThru
+        $launcher = if ($args) { Start-Process -FilePath $fullPath -ArgumentList $args -PassThru } else { Start-Process -FilePath $fullPath -PassThru }
         Wait-Process -Id $launcher.Id
     } elseif ($isLin -or $isMac) {
         $originalTitle = $null
@@ -94,7 +94,7 @@ try {
             chmod +x $fullPath
         }
         
-        $launcher = Start-Process -FilePath $fullPath -ArgumentList $args -PassThru
+        $launcher = if ($args) { Start-Process -FilePath $fullPath -ArgumentList $args -PassThru } else { Start-Process -FilePath $fullPath -PassThru }
         Wait-Process -Id $launcher.Id
     } else {
         Write-Host "Unsupported platform"
