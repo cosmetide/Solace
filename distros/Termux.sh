@@ -781,6 +781,26 @@ host_login() {
         bash "/tmp/.earth-self.sh" "$action" "$@"
 }
 
+install_earth_cmd() {
+    local target="$HOME/.solace/earth.sh" shim="$PREFIX/bin/earth" src tmp=""
+    mkdir -p "$HOME/.solace"
+    if [ -f "$SELF_PATH" ] && [ "$(head -c2 "$SELF_PATH" 2>/dev/null)" = "#!" ]; then
+        src="$SELF_PATH"
+    else
+        info "Fetching earth script from $INSTALL_BRANCH..."
+        tmp="$(mktemp "${TMPDIR:-/tmp}/.earth_XXXXXX")"
+        curl -fsSL --max-time 10 -o "$tmp" "$RAW/distros/Termux.sh" 2>/dev/null \
+            || { rm -f "$tmp"; err "Cannot fetch earth script."; exit 1; }
+        src="$tmp"
+    fi
+    install -m 0755 "$src" "$target"
+    [ -n "$tmp" ] && rm -f "$tmp"
+    printf '#!/%s/bin/bash\nexec bash "%s" "$@"\n' "$PREFIX" "$target" > "$shim"
+    chmod 0755 "$shim"
+    hash -r 2>/dev/null || true
+    ok "earth command installed — from now on use: earth <command>"
+}
+
 ensure_host_pg() {
     command -v pg_ctl >/dev/null 2>&1 || {
         info "Installing native Termux postgresql..."
@@ -822,8 +842,9 @@ do_uninstall() {
     ensure_distro
     host_login _uninstall || true
     stop_host_pg
-    rm -rf "$HOME/.solace/state" "$PG_DATA_HOST"
-    rm -f "$SELF_PATH" "$DISTRO_MIRROR"
+    rm -rf "$HOME/.solace/state" "$PG_DATA_HOST" "$HOME/.solace/earth.sh"
+    rm -f "$SELF_PATH" "$DISTRO_MIRROR" "$PREFIX/bin/earth"
+    hash -r 2>/dev/null || true
     echo "[Solace] Solace has been uninstalled."
 }
 
@@ -879,7 +900,7 @@ main() {
 
     local cmd="${1:-}"; [ $# -gt 0 ] && shift
     case "$cmd" in
-        install)   ensure_distro; host_login _install ;;
+        install)   ensure_distro; install_earth_cmd; host_login _install ;;
         setup)     ensure_distro; host_login _setup ;;
         start)     ensure_distro; do_host_start ;;
         status)    ensure_distro; host_login _status ;;
