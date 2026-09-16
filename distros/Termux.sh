@@ -776,13 +776,20 @@ ensure_distro() {
 
 host_login() {
     local action="${1:-}"; [ $# -gt 0 ] && shift
-    install -m 0755 "$SELF_PATH" "$DISTRO_MIRROR"
+    local src="$SELF_PATH"
+    if [ ! -f "$src" ] || [ "$(head -c2 "$src" 2>/dev/null)" != "#!" ]; then
+        src="$HOME/.solace/earth.sh"
+        [ -f "$src" ] || { err "Cannot locate the earth script."; exit 1; }
+    fi
+    install -m 0755 "$src" "$DISTRO_MIRROR"
     proot-distro login "$DISTRO_NAME" --shared-tmp -- env EARTH_INSIDE=1 \
         bash "/tmp/.earth-self.sh" "$action" "$@"
 }
 
 install_earth_cmd() {
-    local target="$HOME/.solace/earth.sh" shim="$PREFIX/bin/earth" src tmp=""
+    local target="$HOME/.solace/earth.sh" shim="$PREFIX/bin/earth" tmp="" created=0 src
+    if [ -f "$shim" ] && [ -f "$target" ]; then return 0; fi
+    created=1
     mkdir -p "$HOME/.solace"
     if [ -f "$SELF_PATH" ] && [ "$(head -c2 "$SELF_PATH" 2>/dev/null)" = "#!" ]; then
         src="$SELF_PATH"
@@ -798,7 +805,7 @@ install_earth_cmd() {
     printf '#!/%s/bin/bash\nexec bash "%s" "$@"\n' "$PREFIX" "$target" > "$shim"
     chmod 0755 "$shim"
     hash -r 2>/dev/null || true
-    ok "earth command installed — from now on use: earth <command>"
+    [ "$created" -eq 1 ] && ok "earth command installed — from now on use: earth <command>"
 }
 
 ensure_host_pg() {
@@ -877,6 +884,7 @@ show_help() {
 
 self_update() {
     [ -z "${EARTH_NO_SELF_UPDATE:-}" ] && [ -z "${EARTH_INSIDE:-}" ] || return 0
+    [ -f "$SELF_PATH" ] && [ "$(head -c2 "$SELF_PATH" 2>/dev/null)" = "#!" ] || return 0
     command -v curl >/dev/null 2>&1 || return 0
     local tmp
     tmp="$(mktemp "${TMPDIR:-/tmp}/.earth_XXXXXX")"
@@ -897,10 +905,11 @@ main() {
 
     is_termux || { err "Solace for Termux must run inside Termux."; exit 1; }
     ensure_proot
+    install_earth_cmd
 
     local cmd="${1:-}"; [ $# -gt 0 ] && shift
     case "$cmd" in
-        install)   ensure_distro; install_earth_cmd; host_login _install ;;
+        install)   ensure_distro; host_login _install ;;
         setup)     ensure_distro; host_login _setup ;;
         start)     ensure_distro; do_host_start ;;
         status)    ensure_distro; host_login _status ;;
