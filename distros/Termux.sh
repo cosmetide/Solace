@@ -821,6 +821,7 @@ ensure_host_pg() {
             initdb -D "$PG_DATA_HOST" --auth=trust --locale=C || return 1
         fi
         info "Starting Termux-native Postgres on 127.0.0.1:5432..."
+        mkdir -p "$(dirname "$PG_LOG")"
         pg_ctl -D "$PG_DATA_HOST" -l "$PG_LOG" \
             -o "-p 5432 -c listen_addresses=127.0.0.1" start || return 1
         sleep 2
