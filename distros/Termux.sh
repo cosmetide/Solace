@@ -802,7 +802,7 @@ install_earth_cmd() {
     fi
     install -m 0755 "$src" "$target"
     [ -n "$tmp" ] && rm -f "$tmp"
-    printf '#!/%s/bin/bash\nexec bash "%s" "$@"\n' "$PREFIX" "$target" > "$shim"
+    printf '#!%s/bin/bash\nexec bash "%s" "$@"\n' "$PREFIX" "$target" > "$shim"
     chmod 0755 "$shim"
     hash -r 2>/dev/null || true
     [ "$created" -eq 1 ] && ok "earth command installed — from now on use: earth <command>"
