@@ -400,7 +400,7 @@ _update_release() {
         [ -z "${GITHUB_TOKEN:-}" ] && GITHUB_TOKEN=""
         local auth=()
         [ -n "$GITHUB_TOKEN" ] && auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
-        curl -fsSL "${auth[@]:-}" "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${RELEASE_TAG}" \
+        curl -fsSL ${auth[@]+"${auth[@]}"} "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${RELEASE_TAG}" \
             > "${TMP}/release.json" || { err "Release ${RELEASE_TAG} not found (workflow may not have run yet)"; exit 1; }
 
         COMMIT="$(jq -r '.target_commitish // .tag_name // ""' "${TMP}/release.json" 2>/dev/null)"
