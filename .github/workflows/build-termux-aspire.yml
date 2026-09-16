@@ -1,0 +1,126 @@
+name: build termux-aspire
+
+on:
+  push:
+    branches: [aspire]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '11.0.x'
+          dotnet-quality: 'preview'
+
+      - name: Publish services (framework-dependent, linux-arm64)
+        run: |
+          set -euo pipefail
+          for project in \
+            Solace.EventBus.Server Solace.ObjectStore.Server \
+            Solace.Buildplate.ServerSetup Solace.Buildplate.Updater Solace.Buildplate.Launcher \
+            Solace.Locator Solace.TappablesGenerator Solace.TileRenderer \
+            Solace.ApiServer Solace.AuthServer Solace.Cdn Solace.WebPortal; do
+            echo "::group::Publishing $project"
+            dotnet publish "src/$project/$project.csproj" -c Release -r linux-arm64 \
+              --self-contained false \
+              /p:PublishTrimmed=false \
+              /p:EnableTrimAnalyzer=false \
+              /p:DebuggerSupport=false \
+              /p:EnableUnsafeBinaryFormatterSerialization=false \
+              /p:EnableUnsafeUTF7Encoding=false \
+              /p:EventSourceSupport=false \
+              /p:HttpActivityPropagationSupport=false \
+              /p:MetadataUpdaterSupport=false \
+              /p:EFCoreCompileQueries=false \
+              /p:EFCorePrecompileQueries=false \
+              /p:EFPrecompileQueriesStage=None \
+              /p:EFScaffoldModelStage=None \
+              -o "publish/$project"
+            echo "::endgroup::"
+          done
+
+      - name: Download Java 21 JRE (aarch64)
+        run: |
+          curl -fL -o jre21-aarch64.tar.gz \
+            "https://api.adoptium.net/v3/binary/latest/21/ga/linux/aarch64/jre/hotspot/normal/eclipse"
+
+      - name: Package release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release bundle/bin bundle/java/jre
+
+          declare -A assets=(
+            [event-bus]=Solace.EventBus.Server
+            [object-store]=Solace.ObjectStore.Server
+            [buildplate-server-setup]=Solace.Buildplate.ServerSetup
+            [buildplate-updater]=Solace.Buildplate.Updater
+            [buildplate-launcher]=Solace.Buildplate.Launcher
+            [locator]=Solace.Locator
+            [tappable-generator]=Solace.TappablesGenerator
+            [tile-renderer]=Solace.TileRenderer
+            [api-server]=Solace.ApiServer
+            [auth-server]=Solace.AuthServer
+            [cdn]=Solace.Cdn
+            [web-portal]=Solace.WebPortal
+          )
+
+          for svc in "${!assets[@]}"; do
+            project="${assets[$svc]}"
+            mkdir -p "bundle/bin/$svc"
+            mv "publish/$project"/* "bundle/bin/$svc/"
+          done
+
+          tar -xzf jre21-aarch64.tar.gz -C bundle/java/jre --strip-components=1
+
+          tar -czf release/solace-termux-linux-arm64.tar.gz -C bundle .
+
+          tar_sha=$(sha256sum release/solace-termux-linux-arm64.tar.gz | cut -d' ' -f1)
+          cat > release/manifest.json <<EOF
+          {
+            "commit": "$GITHUB_SHA",
+            "branch": "aspire",
+            "arch": "linux-arm64",
+            "date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "assets": [{"name": "solace-termux-linux-arm64.tar.gz", "sha256": "$tar_sha"}]
+          }
+          EOF
+
+          echo "::group::Release assets"
+          ls -la release/
+          cat release/manifest.json
+          echo "::endgroup::"
+
+      - name: Publish release (termux-aspire)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view termux-aspire >/dev/null 2>&1; then
+            gh release upload termux-aspire release/*.tar.gz release/manifest.json --clobber
+          else
+            gh release create termux-aspire \
+              --title "Termux (aspire)" \
+              --notes "Auto-built from the aspire branch. Source: https://github.com/${{ github.repository }}/tree/aspire" \
+              release/*.tar.gz release/manifest.json
+          fi
+
+      - name: Update termux-aspire tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
+          git tag -f termux-aspire
+          git push --force origin refs/tags/termux-aspire
