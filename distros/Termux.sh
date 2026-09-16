@@ -852,19 +852,17 @@ show_help() {
 }
 
 self_update() {
+    [ -z "${EARTH_NO_SELF_UPDATE:-}" ] && [ -z "${EARTH_INSIDE:-}" ] || return 0
     command -v curl >/dev/null 2>&1 || return 0
-    local remote tmp
-    remote="$(curl -fsSL --max-time 10 "$RAW/distros/Termux.sh" 2>/dev/null)" || return 0
-    [ -n "$remote" ] || return 0
-    printf '%s' "$remote" | cmp -s - "$SELF_PATH" && return 0
+    local tmp
     tmp="$(mktemp "${TMPDIR:-/tmp}/.earth_XXXXXX")"
-    printf '%s' "$remote" > "$tmp"
+    curl -fsSL --max-time 10 -o "$tmp" "$RAW/distros/Termux.sh" 2>/dev/null || { rm -f "$tmp"; return 0; }
     [ "$(head -c2 "$tmp")" = "#!" ] || { rm -f "$tmp"; return 0; }
-    chmod +x "$tmp"
-    cp "$tmp" "$SELF_PATH" 2>/dev/null || { rm -f "$tmp"; return 0; }
+    cmp -s "$tmp" "$SELF_PATH" && { rm -f "$tmp"; return 0; }
+    cp -f "$tmp" "$SELF_PATH" 2>/dev/null || { rm -f "$tmp"; return 0; }
     rm -f "$tmp"
     echo "[Solace] Updated to latest ($INSTALL_BRANCH)."
-    exec "$SELF_PATH" "$@"
+    exec "$BASH" "$SELF_PATH" "$@"
 }
 
 main() {
