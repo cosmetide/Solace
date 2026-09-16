@@ -751,8 +751,11 @@ _distro_main() {
 is_termux() { [ -n "$TERMUX_VERSION" ] || printf '%s' "$PREFIX" | grep -q "com.termux"; }
 
 ensure_proot() {
-    command -v proot-distro >/dev/null 2>&1 \
-        || { err "proot-distro is not installed. Run: pkg install proot-distro, then: earth install"; exit 1; }
+    command -v proot-distro >/dev/null 2>&1 && return 0
+    info "Installing proot-distro..."
+    pkg update -y >/dev/null 2>&1 || true
+    pkg install -y proot-distro || { err "Failed to install proot-distro."; exit 1; }
+    ok "proot-distro installed"
 }
 
 ensure_distro() {
