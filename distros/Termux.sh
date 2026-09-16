@@ -27,11 +27,13 @@ RAW="https://raw.githubusercontent.com/${GITHUB_REPO}/${INSTALL_BRANCH}"
 
 SELF_PATH="$(realpath -m "$0" 2>/dev/null || printf '%s' "$0")"
 DISTRO_NAME="ubuntu"
-DISTRO_ROOTFS="${PROOT_DISTRO_ROOT:-$PREFIX/var/lib/proot-distro}/containers/${DISTRO_NAME}"
-LEGACY_ROOTFS="${PROOT_DISTRO_ROOT:-$PREFIX/var/lib/proot-distro}/installed-rootfs/${DISTRO_NAME}"
 PG_DATA_HOST="${HOME}/.solace/pgdata"
 PG_LOG="${HOME}/.solace/state/postgres.log"
-DISTRO_MIRROR="${PREFIX:-/data/data/com.termux/files/usr}/tmp/.earth-self.sh"
+if [ -z "${EARTH_INSIDE:-}" ]; then
+    DISTRO_ROOTFS="${PROOT_DISTRO_ROOT:-${PREFIX:-/data/data/com.termux/files/usr}/var/lib/proot-distro}/containers/${DISTRO_NAME}"
+    LEGACY_ROOTFS="${PROOT_DISTRO_ROOT:-${PREFIX:-/data/data/com.termux/files/usr}/var/lib/proot-distro}/installed-rootfs/${DISTRO_NAME}"
+    DISTRO_MIRROR="${PREFIX:-/data/data/com.termux/files/usr}/tmp/.earth-self.sh"
+fi
 
 c_red='\033[1;31m'; c_grn='\033[1;32m'; c_ylw='\033[1;33m'; c_cyn='\033[1;36m'; c_rst='\033[0m'
 err()  { echo -e "${c_red}[ERROR] $1${c_rst}" >&2; }
