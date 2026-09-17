@@ -55,6 +55,10 @@ JAVA_HOME="${SOLACE_DIR}/java/jre"
 SERVICES="object-store event-bus buildplate-server-setup buildplate-updater buildplate-launcher api-server cdn auth-server web-portal locator tappable-generator tile-renderer"
 SERVICES_REVERSE="tile-renderer tappable-generator locator web-portal auth-server cdn api-server buildplate-launcher buildplate-updater buildplate-server-setup event-bus object-store"
 SVC_PORTS="web-portal:5000 api-server:8089 cdn:8090 auth-server:8088 locator:8080 object-store:18080 event-bus:18081 buildplate-updater:18083 buildplate-launcher:18084 tappable-generator:18085 tile-renderer:18086"
+DASH_PORT=80
+DASH_OTLP_GRPC=4317
+DASH_OTLP_HTTP=4318
+dashboard_enabled() { [ "$(norm_bool "$(get ASPIRE_DASHBOARD_ENABLED true)")" = "true" ]; }
 
 declare -A ENV
 load_env() {
@@ -120,6 +124,8 @@ stop_svc() {
 }
 teardown_services() {
     for s in $SERVICES_REVERSE; do stop_svc "$s"; done
+    if svc_alive aspire-dashboard; then stop_svc aspire-dashboard; fi
+    pkill -f aspire-managed 2>/dev/null || true
     if pgrep -x nginx >/dev/null 2>&1; then
         pkill -x nginx 2>/dev/null || true
         rm -f "$RUN/nginx.pid"
@@ -141,6 +147,63 @@ dotnet_app() {
         echo $! > "$RUN/$name.pid"
     )
     wait_health "$name" "$port" || true
+}
+
+ensure_aspire_dashboard() {
+    local aspire="$DOTNET_ROOT/tools/aspire"
+    if [ -x "$aspire" ] && command -v aspire >/dev/null 2>&1; then
+        return 0
+    fi
+    if [ ! -x "$DOTNET_ROOT/dotnet" ]; then
+        err ".NET runtime missing — run 'earth install'."
+        return 1
+    fi
+    if ! "$DOTNET_ROOT/dotnet" --list-sdks 2>/dev/null | grep -q .; then
+        warn "The Aspire dashboard needs the .NET SDK — installing it now (large download) ..."
+        "$DOTNET_ROOT/dotnet" --list-runtimes 2>/dev/null | grep -q . || { err "No dotnet runtime at all — run 'earth install' first."; return 1; }
+        curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
+        chmod +x /tmp/dotnet-install.sh
+        /tmp/dotnet-install.sh --channel 11.0 --quality preview --install-dir "$DOTNET_ROOT" \
+            >> "$LOGS/aspire-dashboard.log" 2>&1 \
+            || { rm -f /tmp/dotnet-install.sh; warn ".NET SDK install failed — set ASPIRE_DASHBOARD_ENABLED=false to disable the dashboard."; return 1; }
+        rm -f /tmp/dotnet-install.sh
+        ok ".NET SDK installed"
+    fi
+    if ! command -v aspire >/dev/null 2>&1 && [ ! -x "$aspire" ]; then
+        info "Installing Aspire CLI (dotnet global tool)..."
+        "$DOTNET_ROOT/dotnet" tool update -g Aspire.Cli >> "$LOGS/aspire-dashboard.log" 2>&1 \
+            || "$DOTNET_ROOT/dotnet" tool install -g Aspire.Cli >> "$LOGS/aspire-dashboard.log" 2>&1 \
+            || { warn "Aspire CLI install failed — set ASPIRE_DASHBOARD_ENABLED=false to disable."; return 1; }
+    fi
+    command -v aspire >/dev/null 2>&1 || [ -x "$aspire" ] || { warn "Aspire CLI unavailable — dashboard disabled."; return 1; }
+    ok "Aspire CLI installed ($("$aspire" --version 2>/dev/null))"
+}
+
+start_dashboard() {
+    if ! dashboard_enabled; then
+        info "Aspire dashboard disabled (ASPIRE_DASHBOARD_ENABLED=false)."
+        return 0
+    fi
+    if svc_alive aspire-dashboard; then info "aspire-dashboard already running"; return 0; fi
+    ensure_aspire_dashboard || return 1
+    local aspire="$DOTNET_ROOT/tools/aspire"
+    [ -x "$aspire" ] || aspire="$(command -v aspire)"
+    : > "$LOGS/aspire-dashboard.log"
+    info "Starting aspire-dashboard on :$DASH_PORT"
+    (
+        setsid nohup "$aspire" dashboard run --allow-anonymous \
+            --frontend-url "http://0.0.0.0:$DASH_PORT" \
+            --otlp-grpc-url "http://127.0.0.1:$DASH_OTLP_GRPC" \
+            --otlp-http-url "http://127.0.0.1:$DASH_OTLP_HTTP" \
+            >> "$LOGS/aspire-dashboard.log" 2>&1 < /dev/null &
+        echo $! > "$RUN/aspire-dashboard.pid"
+    )
+    wait_health aspire-dashboard "$DASH_PORT" || true
+    if svc_alive aspire-dashboard; then
+        ok "Aspire dashboard: http://127.0.0.1:$DASH_PORT"
+    else
+        warn "aspire-dashboard failed to start — see $LOGS/aspire-dashboard.log"
+    fi
 }
 
 dotnet_job() {
@@ -195,6 +258,12 @@ run_services() {
     local eula static
     eula="$(norm_bool "$(get SHARED_ACCEPTMINECRAFTEULA false)")"
     static="$STATICDATA"
+
+    start_dashboard
+    if dashboard_enabled; then
+        export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:$DASH_OTLP_GRPC"
+        export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+    fi
 
     [ -d "$STATICDATA" ] || warn "staticdata missing at $STATICDATA — run 'earth install' first"
 
@@ -483,7 +552,8 @@ _distro_install() {
     echo "Next:"
     echo "  1. earth setup   — configure endpoint, .env, OIDC certs"
     echo "  2. earth start   — boot the server (Ctrl+C stops it)"
-    echo "  3. Admin panel:  http://127.0.0.1:5000"
+    echo "  3. Admin panel:  http://127.0.0.1/ (Aspire dashboard; web portal at :5000)"
+    echo "  4. Admin creds shown at 'earth start' (admin@solace.com)"
     ok "bootstrap done"
 }
 
@@ -498,7 +568,7 @@ ask() {
     fi
 }
 ask_yes() {
-    local a; a="$(ask "$1 (y/N)" "${2:-n}")"
+    local a d="${2:-n}"; a="$(ask "$1 (y/N default=$d)" "$d")"
     case "$a" in y|Y|yes|YES) return 0 ;; esac
     return 1
 }
@@ -537,6 +607,9 @@ _distro_setup() {
     eula=0
     if ask_yes "Accept the Minecraft EULA (required for buildplates)?" "n"; then eula=1; fi
 
+    dasha=0
+    if ask_yes "Enable the Aspire dashboard on port 80 (admin panel)?" "y"; then dasha=1; fi
+
     sign_pass="$(ask "OIDC signing cert password (blank = random)" "")"
     [ -z "$sign_pass" ] && sign_pass="$(rand_hex 16)"
     enc_pass="$(ask "OIDC encryption cert password (blank = random)" "")"
@@ -563,6 +636,8 @@ _distro_setup() {
 # Solace native (proot Ubuntu) environment — generated by 'earth setup'.
 
 POSTGRES_PASSWORD=$(rand_hex 24)
+
+ASPIRE_DASHBOARD_ENABLED=$( [ "${dasha}" = "1" ] && echo true || echo false )
 
 SHARED_ACCEPTMINECRAFTEULA=$( [ "${eula}" = "1" ] && echo true || echo false )
 
@@ -648,7 +723,7 @@ _distro_daemon() {
     teardown_services
 
     load_env
-    export PATH="$DOTNET_ROOT:$PATH"
+    export PATH="$DOTNET_ROOT:$DOTNET_ROOT/tools:$PATH"
     export DOTNET_ROOT DOTNET_CLI_TELEMETRY_OPTOUT=1
     # Workstation GC — Server GC reserves 256 GiB of VM and fails on low-memory devices.
     export DOTNET_gcServer=0
@@ -657,12 +732,28 @@ _distro_daemon() {
     ensure_postgres
     pg_conf
     run_services
-    start_nginx
+    # nginx would contend for :80 — only use it when the Aspire dashboard isn't serving there.
+    if dashboard_enabled && svc_alive aspire-dashboard; then
+        info "aspire-dashboard owns :$DASH_PORT; skipping nginx (web portal direct at :5000)"
+    else
+        start_nginx
+    fi
 
     echo ""
     ok "Solace is up."
-    echo "  Admin panel: http://127.0.0.1:5000"
-    echo "  EULA:        earth eula"
+    if [ "$DASH_PORT" = "80" ]; then
+        admin_url="http://127.0.0.1/"
+    else
+        admin_url="http://127.0.0.1:$DASH_PORT"
+    fi
+    local admin_pass admin_user
+    admin_user="admin@solace.com"
+    admin_pass="$(get WEBPORTAL_ADMINACCOUNTPASSWORD)"
+    echo "  Admin panel:  $admin_url  (Aspire dashboard)"
+    echo "  Web portal:   http://127.0.0.1:5000"
+    echo "  Admin user:   $admin_user"
+    echo "  Admin pass:   $admin_pass"
+    echo "  EULA:         earth eula"
     echo ""
     echo "  Live logs below — press Ctrl+C to stop the server."
     echo "  --------------------------------------------------"
@@ -689,8 +780,16 @@ _distro_status() {
     pg_isready -h 127.0.0.1 -p 5432 -q 2>/dev/null \
         && echo -e "  ${c_grn}[RUNNING]${c_rst} postgres (host)" \
         || echo -e "  ${c_red}[STOPPED]${c_rst} postgres (host)"
+    if svc_alive aspire-dashboard; then
+        echo -e "  ${c_grn}[RUNNING]${c_rst} aspire-dashboard (http://127.0.0.1:$DASH_PORT)"
+    else
+        echo -e "  ${c_red}[STOPPED]${c_rst} aspire-dashboard"
+    fi
     echo ""
-    echo "Ports: $SVC_PORTS"
+    echo "Ports: $SVC_PORTS, aspire-dashboard:$DASH_PORT/otlp:$DASH_OTLP_GRPC"
+    echo ""
+    echo "Admin user: admin@solace.com"
+    echo "Admin pass: $(get WEBPORTAL_ADMINACCOUNTPASSWORD)"
 }
 
 _distro_logs() {
