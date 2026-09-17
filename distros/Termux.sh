@@ -171,11 +171,22 @@ ensure_aspire_dashboard() {
     fi
     if ! command -v aspire >/dev/null 2>&1 && [ ! -x "$aspire" ]; then
         info "Installing Aspire CLI (dotnet global tool)..."
-        "$DOTNET_ROOT/dotnet" tool update -g Aspire.Cli >> "$LOGS/aspire-dashboard.log" 2>&1 \
-            || "$DOTNET_ROOT/dotnet" tool install -g Aspire.Cli >> "$LOGS/aspire-dashboard.log" 2>&1 \
-            || { warn "Aspire CLI install failed — set ASPIRE_DASHBOARD_ENABLED=false to disable."; return 1; }
+        # NuGet restore of the tool can SIGABRT on low-RAM phones — keep the GC
+        # in plain workstation mode (no inherited server-GC hints) for the restore.
+        if ! { env -u DOTNET_GCHeapHardLimit -u DOTNET_gcServer \
+                "$DOTNET_ROOT/dotnet" tool install -g Aspire.Cli >> "$LOGS/aspire-dashboard.log" 2>&1; } \
+           && ! { env -u DOTNET_GCHeapHardLimit -u DOTNET_gcServer \
+                "$DOTNET_ROOT/dotnet" tool update -g Aspire.Cli >> "$LOGS/aspire-dashboard.log" 2>&1; }; then
+            warn "Aspire CLI install failed — last log lines:"
+            tail -n 8 "$LOGS/aspire-dashboard.log" 2>/dev/null | sed 's/^/    /'
+            warn "aspire-dashboard disabled (server continues). Set ASPIRE_DASHBOARD_ENABLED=false to skip."
+            return 1
+        fi
     fi
-    command -v aspire >/dev/null 2>&1 || [ -x "$aspire" ] || { warn "Aspire CLI unavailable — dashboard disabled."; return 1; }
+    command -v aspire >/dev/null 2>&1 || [ -x "$aspire" ] || {
+        warn "Aspire CLI unavailable — dashboard disabled."
+        tail -n 8 "$LOGS/aspire-dashboard.log" 2>/dev/null | sed 's/^/    /'
+        return 1; }
     ok "Aspire CLI installed ($("$aspire" --version 2>/dev/null))"
 }
 
@@ -185,7 +196,11 @@ start_dashboard() {
         return 0
     fi
     if svc_alive aspire-dashboard; then info "aspire-dashboard already running"; return 0; fi
-    ensure_aspire_dashboard || return 1
+    # Dashboard is best-effort: failures must never take the whole server down.
+    if ! ensure_aspire_dashboard; then
+        export ASPIRE_DASHBOARD_UP=false
+        return 0
+    fi
     local aspire="$DOTNET_ROOT/tools/aspire"
     [ -x "$aspire" ] || aspire="$(command -v aspire)"
     : > "$LOGS/aspire-dashboard.log"
@@ -200,8 +215,10 @@ start_dashboard() {
     )
     wait_health aspire-dashboard "$DASH_PORT" || true
     if svc_alive aspire-dashboard; then
+        export ASPIRE_DASHBOARD_UP=true
         ok "Aspire dashboard: http://127.0.0.1:$DASH_PORT"
     else
+        export ASPIRE_DASHBOARD_UP=false
         warn "aspire-dashboard failed to start — see $LOGS/aspire-dashboard.log"
     fi
 }
@@ -260,7 +277,8 @@ run_services() {
     static="$STATICDATA"
 
     start_dashboard
-    if dashboard_enabled; then
+    # Only export OTLP if the dashboard is actually collecting.
+    if [ "${ASPIRE_DASHBOARD_UP:-false}" = true ]; then
         export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:$DASH_OTLP_GRPC"
         export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
     fi
@@ -741,15 +759,19 @@ _distro_daemon() {
 
     echo ""
     ok "Solace is up."
-    if [ "$DASH_PORT" = "80" ]; then
-        admin_url="http://127.0.0.1/"
-    else
-        admin_url="http://127.0.0.1:$DASH_PORT"
-    fi
     local admin_pass admin_user
     admin_user="admin@solace.com"
     admin_pass="$(get WEBPORTAL_ADMINACCOUNTPASSWORD)"
-    echo "  Admin panel:  $admin_url  (Aspire dashboard)"
+    if [ "${ASPIRE_DASHBOARD_UP:-false}" = true ]; then
+        if [ "$DASH_PORT" = "80" ]; then
+            admin_url="http://127.0.0.1/"
+        else
+            admin_url="http://127.0.0.1:$DASH_PORT"
+        fi
+        echo "  Admin panel:  $admin_url  (Aspire dashboard)"
+    else
+        echo "  Admin panel:  http://127.0.0.1:5000  (dashboard unavailable — see logs)"
+    fi
     echo "  Web portal:   http://127.0.0.1:5000"
     echo "  Admin user:   $admin_user"
     echo "  Admin pass:   $admin_pass"
