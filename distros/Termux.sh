@@ -134,9 +134,12 @@ dotnet_app() {
     [ -f "$BIN/$name/$app" ] || { err "Missing $BIN/$name/$app — run 'earth update'."; exit 1; }
     : > "$LOGS/$name.log"
     info "Starting $name on :$port"
-    setsid nohup env "$@" "$DOTNET_ROOT/dotnet" "$BIN/$name/$app" \
-        >> "$LOGS/$name.log" 2>&1 < /dev/null &
-    echo $! > "$RUN/$name.pid"
+    (
+        cd "$BIN/$name" || { err "Cannot cd to $BIN/$name"; exit 1; }
+        setsid nohup env "$@" "$DOTNET_ROOT/dotnet" "$app" \
+            >> "$LOGS/$name.log" 2>&1 < /dev/null &
+        echo $! > "$RUN/$name.pid"
+    )
     wait_health "$name" "$port" || true
 }
 
@@ -147,7 +150,10 @@ dotnet_job() {
     info "Running $name (one-shot job)..."
     local rc=0
     : > "$LOGS/$name.log"
-    env "$@" "$DOTNET_ROOT/dotnet" "$BIN/$name/$app" >> "$LOGS/$name.log" 2>&1 || rc=$?
+    (
+        cd "$BIN/$name" || { err "Cannot cd to $BIN/$name"; exit 1; }
+        env "$@" "$DOTNET_ROOT/dotnet" "$app" >> "$LOGS/$name.log" 2>&1 || rc=$?
+    ) || rc=$?
     if [ "$rc" -eq 0 ]; then
         ok "$name completed"
         : > "$RUN/$name.done"
