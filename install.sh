@@ -239,9 +239,11 @@ export PATH="$HOME/.dotnet:$HOME/.dotnet/tools:$PATH"
 export DOTNET_CLI_TELEMETRY_OPTOUT=1
 export DOTNET_NOLOGO=1
 export DOTNET_gcServer=0
-export DOTNET_GCHeapHardLimit=1073741824
 BASHRC
 fi
+# Older installers set DOTNET_GCHeapHardLimit, but with DATAS a hard limit makes the
+# runtime reserve a ~329 GiB regions range, which fails under proot-distro.
+sed -i '/DOTNET_GCHeapHardLimit/d' "$HOME/.bashrc" 2>/dev/null || true
 
 echo "  [5/7] Fetching Solace ($GITHUB_BRANCH)"
 if [ -d "$SOLACE_DIR/.git" ]; then

@@ -379,8 +379,7 @@ start_server() {
             export DOTNET_CLI_TELEMETRY_OPTOUT=1
             export DOTNET_NOLOGO=1
             export DOTNET_gcServer=0
-            export DOTNET_GCHeapHardLimit=1073741824
-            export ASPIRE_CLI_START_TIMEOUT=7200
+            export ASPIRE_CLI_START_TIMEOUT=21600
             cd /root/Solace || exit 1
             aspire run --detach --format json --non-interactive --apphost "$APP_HOST" -- --environment Termux >"$STARTUP_JSON"
             rc=$?
