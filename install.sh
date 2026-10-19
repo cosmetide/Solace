@@ -264,8 +264,8 @@ echo "  [6/7] Writing Termux configuration"
 mkdir -p "$CONFIG_DIR"
 
 # Preserve the EULA decision and public endpoint across reinstall/update runs.
-OLD_EULA="$(grep -E '^Shared__AcceptMinecraftEula=' "$ENV_FILE" 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d "'\"")"
-OLD_PUBLIC_IP="$(grep -E '^SOLACE_PUBLIC_IP=' "$ENV_FILE" 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d "'\"")"
+OLD_EULA="$(grep -E '^Shared__AcceptMinecraftEula=' "$ENV_FILE" 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d "'\"" || true)"
+OLD_PUBLIC_IP="$(grep -E '^SOLACE_PUBLIC_IP=' "$ENV_FILE" 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d "'\"" || true)"
 EULA_VALUE="${OLD_EULA:-false}"
 PUBLIC_IP_VALUE="${OLD_PUBLIC_IP:-127.0.0.1}"
 
