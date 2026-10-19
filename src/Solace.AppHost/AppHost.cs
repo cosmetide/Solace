@@ -1,9 +1,23 @@
 using System.Globalization;
 using System.Net;
+using Aspire.Hosting.ApplicationModel;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Solace.AppHost;
+
+// The AppHost launch profile forces the Development environment (and HTTPS dashboard
+// endpoints) when the Aspire CLI starts this project. Termux runs without Docker and must
+// load appsettings.Termux.json instead, so switch the environment before the builder is
+// created. Termux__Enabled is set by the Termux launcher (see termux.env).
+if (string.Equals(Environment.GetEnvironmentVariable("Termux__Enabled"), "true", StringComparison.OrdinalIgnoreCase))
+{
+    Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", "Termux");
+    Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", "Termux");
+    Environment.SetEnvironmentVariable("ASPIRE_DASHBOARD_OTLP_ENDPOINT_URL", "http://127.0.0.1:19251");
+    Environment.SetEnvironmentVariable("ASPIRE_RESOURCE_SERVICE_ENDPOINT_URL", "http://127.0.0.1:20090");
+    Environment.SetEnvironmentVariable("ASPIRE_ALLOW_UNSECURED_TRANSPORT", "true");
+}
 
 #pragma warning disable MA0048 // File name must match type name
 var builder = DistributedApplication.CreateBuilder(args);
@@ -12,45 +26,66 @@ var builder = DistributedApplication.CreateBuilder(args);
 var migrationMode = builder.Configuration.GetValue<bool>("migration-mode");
 var testMode = builder.Configuration.GetValue<bool>("TestMode");
 
-builder.AddDockerComposeEnvironment("solace-prod")
-    .WithProperties(env =>
-    {
-        env.DashboardEnabled = true;
-    })
-    .WithDashboard(dashboard =>
-    {
-        dashboard.WithHostPort(5000)
-            .WithForwardedHeaders(enabled: true);
-    })
-    .ConfigureComposeFile(file =>
-    {
-        if (file.Services.TryGetValue("solace-prod-dashboard", out var dashboardSvc))
-        {
-            dashboardSvc.Environment["Dashboard__Otlp__AuthMode"] = "ApiKey";
-            dashboardSvc.Environment["Dashboard__Otlp__PrimaryApiKey"] = "${DASHBOARD_OTLP_PRIMARY_APIKEY}";
-        }
+// Termux runs inside proot-distro without Docker. Postgres and nginx are provided by
+// the Termux setup script instead of containers, and database connection strings are
+// supplied through the ConnectionStrings__* environment variables.
+var termuxMode = builder.Configuration.GetValue<bool>("Termux:Enabled");
 
-        foreach (var service in file.Services.Values)
-        {
-            if (service.Environment.ContainsKey("OTEL_EXPORTER_OTLP_ENDPOINT"))
-            {
-                service.Environment["OTEL_EXPORTER_OTLP_HEADERS"] = "x-otlp-api-key=${DASHBOARD_OTLP_PRIMARY_APIKEY}";
-            }
-        }
-    });
-
-var postgres = builder.AddPostgres("postgres")
-    .WithPgAdmin();
-
-if (builder.Configuration.GetValue("UseVolumes", true))
+if (!termuxMode)
 {
-    var volumeName = builder.Configuration.GetValue<string?>("PostgresVolumeName", null);
-    postgres.WithDataVolume(string.IsNullOrWhiteSpace(volumeName) ? null : volumeName);
+    builder.AddDockerComposeEnvironment("solace-prod")
+        .WithProperties(env =>
+        {
+            env.DashboardEnabled = true;
+        })
+        .WithDashboard(dashboard =>
+        {
+            dashboard.WithHostPort(5000)
+                .WithForwardedHeaders(enabled: true);
+        })
+        .ConfigureComposeFile(file =>
+        {
+            if (file.Services.TryGetValue("solace-prod-dashboard", out var dashboardSvc))
+            {
+                dashboardSvc.Environment["Dashboard__Otlp__AuthMode"] = "ApiKey";
+                dashboardSvc.Environment["Dashboard__Otlp__PrimaryApiKey"] = "${DASHBOARD_OTLP_PRIMARY_APIKEY}";
+            }
+
+            foreach (var service in file.Services.Values)
+            {
+                if (service.Environment.ContainsKey("OTEL_EXPORTER_OTLP_ENDPOINT"))
+                {
+                    service.Environment["OTEL_EXPORTER_OTLP_HEADERS"] = "x-otlp-api-key=${DASHBOARD_OTLP_PRIMARY_APIKEY}";
+                }
+            }
+        });
 }
 
-var earthDb = postgres.AddDatabase("EarthDb");
-var playfabDb = postgres.AddDatabase("PlayfabDb");
-var webPortalDb = postgres.AddDatabase("WebPortalDb");
+IResourceBuilder<IResourceWithConnectionString> earthDb;
+IResourceBuilder<IResourceWithConnectionString> playfabDb;
+IResourceBuilder<IResourceWithConnectionString> webPortalDb;
+
+if (termuxMode)
+{
+    earthDb = builder.AddConnectionString("EarthDb");
+    playfabDb = builder.AddConnectionString("PlayfabDb");
+    webPortalDb = builder.AddConnectionString("WebPortalDb");
+}
+else
+{
+    var postgres = builder.AddPostgres("postgres")
+        .WithPgAdmin();
+
+    if (builder.Configuration.GetValue("UseVolumes", true))
+    {
+        var volumeName = builder.Configuration.GetValue<string?>("PostgresVolumeName", null);
+        postgres.WithDataVolume(string.IsNullOrWhiteSpace(volumeName) ? null : volumeName);
+    }
+
+    earthDb = postgres.AddDatabase("EarthDb");
+    playfabDb = postgres.AddDatabase("PlayfabDb");
+    webPortalDb = postgres.AddDatabase("WebPortalDb");
+}
 
 var objectStoreDataDirectory = builder.Configuration.GetValue<string>("ObjectStore:DataDirectory", "data/object_store");
 if (builder.Configuration.GetValue<bool>("Shared:ResolvePaths", false))
@@ -227,9 +262,7 @@ var apiServer = builder.AddProject<Projects.Solace_ApiServer>("api-server")
     })
     .WithHttpHealthCheck("/health")
     .WithReference(earthDb)
-    .WaitFor(earthDb)
     .WithReference(playfabDb)
-    .WaitFor(playfabDb)
     .WithReference(eventBus)
     .WaitFor(eventBus)
     .WithReference(objectStore)
@@ -262,6 +295,11 @@ var apiServer = builder.AddProject<Projects.Solace_ApiServer>("api-server")
         });
     });
 
+if (!termuxMode)
+{
+    apiServer.WaitFor(earthDb).WaitFor(playfabDb);
+}
+
 var cdnPort = builder.Configuration.GetValue<int>("Cdn:Port", 8090);
 
 var cdn = builder.AddProject<Projects.Solace_Cdn>("cdn")
@@ -272,7 +310,6 @@ var cdn = builder.AddProject<Projects.Solace_Cdn>("cdn")
     })
     .WithHttpHealthCheck("/health")
     .WithReference(earthDb)
-    .WaitFor(earthDb)
     .WithReference(eventBus)
     .WaitFor(eventBus)
     .WithReference(objectStore)
@@ -291,6 +328,11 @@ var cdn = builder.AddProject<Projects.Solace_Cdn>("cdn")
 
         service.Environment["StaticDataPath"] = "/app/static-data";
     });
+
+if (!termuxMode)
+{
+    cdn.WaitFor(earthDb);
+}
 
 var authServerPort = builder.Configuration.GetValue<int>("AuthServer:Port", 8088);
 var webPortalPort = builder.Configuration.GetValue<int>("WebPortal:Port", 5000);
@@ -311,9 +353,7 @@ var authServer = builder.AddProject<Projects.Solace_AuthServer>("auth-server")
     })
     .WithHttpHealthCheck("/health")
     .WithReference(earthDb)
-    .WaitFor(earthDb)
     .WithReference(playfabDb)
-    .WaitFor(playfabDb)
     .WithReference(eventBus)
     .WaitFor(eventBus)
     .WithEnvironmentSection(builder.Configuration, "AuthServer:Authentication", prefixToRemove: "AuthServer:")
@@ -349,6 +389,11 @@ var authServer = builder.AddProject<Projects.Solace_AuthServer>("auth-server")
 
         service.Environment["StaticDataPath"] = "/app/static-data";
     });
+
+if (!termuxMode)
+{
+    authServer.WaitFor(earthDb).WaitFor(playfabDb);
+}
 
 var locatorPort = builder.Configuration.GetValue<int>("Locator:Port", 8080);
 
@@ -438,11 +483,8 @@ var webPortal = builder.AddProject<Projects.Solace_WebPortal>("web-portal")
     .WithReference(authServer)
     .WaitFor(authServer)
     .WithReference(earthDb)
-    .WaitFor(earthDb)
     .WithReference(playfabDb)
-    .WaitFor(playfabDb)
     .WithReference(webPortalDb)
-    .WaitFor(webPortalDb)
     .WithReference(eventBus)
     .WaitFor(eventBus)
     .WithReference(objectStore)
@@ -511,17 +553,53 @@ var webPortal = builder.AddProject<Projects.Solace_WebPortal>("web-portal")
         });
     });
 
+if (!termuxMode)
+{
+    webPortal.WaitFor(earthDb).WaitFor(playfabDb).WaitFor(webPortalDb);
+}
+
 authServer.WithReference(webPortal);
 
-builder.AddContainer("nginx", "nginx", "alpine")
-    .WithExternalHttpEndpoints()
-    .WaitFor(webPortal)
-    .WaitFor(locator)
-    .WaitFor(authServer)
-    .WaitFor(apiServer)
-    .WaitFor(cdn)
-    .WithBindMount("./nginx.conf", "/etc/nginx/nginx.conf", isReadOnly: true)
-    .WithBindMount("./certs", "/etc/nginx/certs", isReadOnly: true)
-    .WithLifetime(ContainerLifetime.Persistent);
+// Termux has no Docker, so the services are exposed on their individual ports
+// (5000, 8080, 8088, 8089 and 8090) instead of going through nginx.
+if (!termuxMode)
+{
+    builder.AddContainer("nginx", "nginx", "alpine")
+        .WithExternalHttpEndpoints()
+        .WaitFor(webPortal)
+        .WaitFor(locator)
+        .WaitFor(authServer)
+        .WaitFor(apiServer)
+        .WaitFor(cdn)
+        .WithBindMount("./nginx.conf", "/etc/nginx/nginx.conf", isReadOnly: true)
+        .WithBindMount("./certs", "/etc/nginx/certs", isReadOnly: true)
+        .WithLifetime(ContainerLifetime.Persistent);
+}
+
+if (termuxMode)
+{
+    // There is no nginx in Termux mode, so every public service port must be reachable
+    // directly from the LAN instead of only through the DCP loopback proxy.
+    apiServer.WithExternalHttpEndpoints();
+    cdn.WithExternalHttpEndpoints();
+    authServer.WithExternalHttpEndpoints();
+    webPortal.WithExternalHttpEndpoints();
+    locator.WithExternalHttpEndpoints();
+}
+
+// The AppHost runs in the Termux environment, but the services must keep using the
+// standard Development environment: the /health endpoints used by the AppHost health
+// checks are only mapped in Development (see ServiceDefaults.MapDefaultEndpoints).
+if (termuxMode)
+{
+    foreach (var project in builder.Resources.OfType<ProjectResource>())
+    {
+        project.Annotations.Add(new EnvironmentCallbackAnnotation(context =>
+        {
+            context.EnvironmentVariables["ASPNETCORE_ENVIRONMENT"] = "Development";
+            context.EnvironmentVariables["DOTNET_ENVIRONMENT"] = "Development";
+        }));
+    }
+}
 
 builder.Build().Run();
