@@ -41,6 +41,10 @@
 The `install.sh` script automates everything below. Use this section when you want to
 build or debug the AppHost manually inside proot-distro Ubuntu.
 
+The `earth` TUI and PostgreSQL run in Termux and use `fzf`, `pgrep`, `pkill` and the
+`postgresql` package; install them with `pkg install fzf procps postgresql`. `install.sh`
+does this automatically.
+
 1. Install Termux from F-Droid, then install the proot helper:
 
    ```bash
@@ -54,7 +58,7 @@ build or debug the AppHost manually inside proot-distro Ubuntu.
    ```bash
    apt-get update
    apt-get install -y ca-certificates curl wget git unzip fzf openssl \
-       openjdk-21-jre-headless libicu-dev postgresql postgresql-client \
+       openjdk-21-jre-headless libicu-dev \
        procps psmisc iproute2 tzdata libfontconfig1 libfreetype6
    ```
 
@@ -68,15 +72,24 @@ build or debug the AppHost manually inside proot-distro Ubuntu.
    dotnet tool install -g Aspire.Cli --version 13.5.4
    ```
 
-4. Create a local PostgreSQL role and databases:
+4. Set up PostgreSQL in Termux (proot cannot run database clusters, so the database
+   lives outside Ubuntu):
 
    ```bash
-   pg_ctlcluster "$(ls /etc/postgresql | sort -V | tail -n1)" main start
-   su postgres -c "psql -c \"CREATE ROLE solace WITH LOGIN PASSWORD 'change-me';\""
-   su postgres -c "createdb -O solace EarthDb"
-   su postgres -c "createdb -O solace PlayfabDb"
-   su postgres -c "createdb -O solace WebPortalDb"
+   pkg install postgresql
+   PGDATA="$PREFIX/var/lib/postgresql"
+   printf 'change-me\n' > "$PREFIX/tmp/pg-pw"
+   initdb -D "$PGDATA" -U solace -E UTF8 --locale=C.UTF-8 \
+       --auth-local=trust --auth-host=scram-sha-256 --pwfile="$PREFIX/tmp/pg-pw"
+   rm "$PREFIX/tmp/pg-pw"
+   printf '\nunix_socket_directories = %s\n' "'$PREFIX/tmp'" >> "$PGDATA/postgresql.conf"
+   pg_ctl -D "$PGDATA" -w start
+   for db in EarthDb PlayfabDb WebPortalDb; do
+       PGPASSWORD=change-me createdb -h 127.0.0.1 -U solace -O solace "$db"
+   done
    ```
+
+   The services inside Ubuntu reach this server on `127.0.0.1:5432`.
 
 5. Clone the repository and fetch the submodules:
 
@@ -117,6 +130,10 @@ build or debug the AppHost manually inside proot-distro Ubuntu.
    is set, `AppHost.cs` switches the environment to `Termux` before the builder is created
    and uses HTTP dashboard endpoints, so `appsettings.Termux.json` is loaded even when
    Aspire starts the project through its launch profile.
+
+   This manual command runs in the current proot session, so the server stops when that
+   session exits. The installed `earth` launcher avoids this by keeping a separate
+   long-lived proot session for the server.
 
 8. The resource pack is required for buildplate previews and some static data. Put it at
    `staticdata/resourcepacks/vanilla.zip`.

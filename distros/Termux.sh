@@ -38,6 +38,12 @@ STARTUP_LOG="$LOG_DIR/startup.log"
 PID_FILE="$CONFIG_DIR/server.pid"
 ADMIN_URL="http://127.0.0.1:5000"
 
+# PostgreSQL runs natively in Termux as the Termux user. proot's fake root cannot run
+# initdb or the postmaster (filesystem ownership checks fail), but the container shares
+# the network stack with Termux, so the services still reach the database on
+# 127.0.0.1:5432.
+TERMUX_PGDATA="$TERMUX_PREFIX/var/lib/postgresql"
+
 # Paths as seen by processes inside the container.
 UBUNTU_SOLACE_DIR="/root/Solace"
 UBUNTU_CONFIG_DIR="/root/.config/solace"
@@ -282,35 +288,62 @@ exec "$@"' _ "$@"
 }
 
 check_deps() {
-    local missing
-    missing="$(ubuntu_run bash -c "$UBUNTU_DOTNET_PRELUDE"'
-for c in dotnet aspire java git curl psql dropdb pg_ctlcluster pg_isready pkill; do
+    local missing="" cmd ubuntu_missing
+    for cmd in fzf pgrep pkill curl pg_ctl pg_isready psql; do
+        command -v "$cmd" >/dev/null 2>&1 || missing="$missing $cmd"
+    done
+    [ -f "$TERMUX_PGDATA/PG_VERSION" ] || missing="$missing postgres"
+    ubuntu_missing="$(ubuntu_run bash -c "$UBUNTU_DOTNET_PRELUDE"'
+for c in dotnet aspire java git; do
     command -v "$c" >/dev/null 2>&1 || echo "$c"
-done')"
-    if [ -n "$missing" ]; then
-        echo "Missing dependencies: $(echo "$missing" | tr '\n' ' ')"
+done' 2>/dev/null)"
+    if [ -n "$missing$ubuntu_missing" ]; then
+        echo "Missing dependencies:$missing $ubuntu_missing"
         return 1
     fi
     return 0
 }
 
+# ─── POSTGRESQL (Termux-native) ───────────────────────────
+
+pg_ready() {
+    pg_isready -q -h 127.0.0.1 -p 5432 2>/dev/null
+}
+
+start_postgres() {
+    pg_ready && return 0
+    if [ ! -f "$TERMUX_PGDATA/PG_VERSION" ]; then
+        echo "PostgreSQL is not configured. Run install.sh again."
+        return 1
+    fi
+    pg_ctl -D "$TERMUX_PGDATA" -l "$TERMUX_PGDATA/server.log" -w -t 120 start >/dev/null 2>&1 || true
+    local waited=0
+    while [ "$waited" -lt 120 ]; do
+        pg_ready && return 0
+        sleep 1
+        waited=$((waited + 1))
+    done
+    echo "PostgreSQL failed to start. See $TERMUX_PGDATA/server.log"
+    return 1
+}
+
+stop_postgres() {
+    pg_ready || return 0
+    pg_ctl -D "$TERMUX_PGDATA" -w -t 60 stop -m fast >/dev/null 2>&1 || true
+}
+
 with_postgres() {
-    # Starts PostgreSQL in a throwaway proot session and runs $1 with it online. If the
-    # server (and therefore its PostgreSQL) is already running, this is a no-op start.
-    proot-distro login ubuntu -- env PAYLOAD="$1" bash -c '
-        version="$(ls /etc/postgresql 2>/dev/null | sort -V | tail -n1)"
-        if [ -z "$version" ] || [ ! -d "/etc/postgresql/$version/main" ]; then
-            echo "PostgreSQL is not installed. Run the installer again."
-            exit 1
-        fi
-        pg_ctlcluster "$version" main start >/dev/null 2>&1 || true
-        for _ in $(seq 1 30); do
-            pg_isready -q && break
-            sleep 1
-        done
-        pg_isready -q || { echo "PostgreSQL failed to start."; exit 1; }
-        bash -c "$PAYLOAD"
-    '
+    # Runs $1 with PostgreSQL online. If the database was not running, it is stopped
+    # again afterwards. Maintenance payloads use $SOLACE_DB_PASSWORD from termux.env.
+    local payload="$1" started=0 rc
+    if ! pg_ready; then
+        start_postgres || return 1
+        started=1
+    fi
+    bash -c "$payload"
+    rc=$?
+    [ "$started" -eq 1 ] && stop_postgres
+    return "$rc"
 }
 
 # ─── START / STOP ─────────────────────────────────────────
@@ -324,6 +357,8 @@ start_server() {
         echo "Run the installer again or use Settings > Repair."
         return 1
     fi
+
+    start_postgres || return 1
 
     mkdir -p "$LOG_DIR"
     rm -f "$STARTUP_JSON" "$PID_FILE"
@@ -345,15 +380,7 @@ start_server() {
             export DOTNET_NOLOGO=1
             export DOTNET_gcServer=0
             export DOTNET_GCHeapHardLimit=1073741824
-            export ASPIRE_CLI_START_TIMEOUT=1800
-            version="$(ls /etc/postgresql 2>/dev/null | sort -V | tail -n1)"
-            [ -n "$version" ] || { echo "PostgreSQL is not installed."; exit 1; }
-            pg_ctlcluster "$version" main start >/dev/null 2>&1 || true
-            for _ in $(seq 1 30); do
-                pg_isready -q && break
-                sleep 1
-            done
-            pg_isready -q || { echo "PostgreSQL failed to start."; exit 1; }
+            export ASPIRE_CLI_START_TIMEOUT=7200
             cd /root/Solace || exit 1
             aspire run --detach --format json --non-interactive --apphost "$APP_HOST" -- --environment Termux >"$STARTUP_JSON"
             rc=$?
@@ -420,15 +447,7 @@ stop_server() {
         waited=$((waited + 1))
     done
 
-    # PostgreSQL normally belongs to the server's wrapper session, but stop it anyway if
-    # a previous run left an orphaned postmaster behind.
-    proot-distro login ubuntu -- bash -c '
-        version="$(ls /etc/postgresql 2>/dev/null | sort -V | tail -n1)"
-        if [ -n "$version" ]; then
-            pg_ctlcluster "$version" main stop -m fast >/dev/null 2>&1 || true
-        fi
-    ' 2>/dev/null || true
-
+    stop_postgres
     rm -f "$PID_FILE" "$STARTUP_JSON"
 }
 
@@ -779,10 +798,10 @@ reset_databases() {
     stop_server
 
     with_postgres 'for db in EarthDb PlayfabDb WebPortalDb; do
-        su postgres -c "dropdb --force --if-exists $db" 2>/dev/null || true
-        su postgres -c "createdb -O solace $db" 2>/dev/null || true
-    done
-    rm -rf /root/.aspnet/DataProtection-Keys'
+        PGPASSWORD="$SOLACE_DB_PASSWORD" dropdb -h 127.0.0.1 -U solace --force --if-exists "$db" 2>/dev/null || true
+        PGPASSWORD="$SOLACE_DB_PASSWORD" createdb -h 127.0.0.1 -U solace -O solace "$db" 2>/dev/null || true
+    done'
+    rm -rf "$UBUNTU_HOME/.aspnet/DataProtection-Keys"
 
     echo "[Solace] Databases reset."
     sleep 2
@@ -799,10 +818,23 @@ uninstall_solace() {
     [ "$CONFIRM" = "YES" ] || return
 
     stop_server
-    with_postgres 'for db in EarthDb PlayfabDb WebPortalDb; do
-        su postgres -c "dropdb --force --if-exists $db" 2>/dev/null || true
-    done
-    su postgres -c "psql -c \"DROP ROLE IF EXISTS solace\"" 2>/dev/null || true'
+
+    if [ -f "$TERMUX_PGDATA/.solace-managed" ]; then
+        # The cluster was created by the installer, so remove it completely.
+        stop_postgres
+        rm -rf "$TERMUX_PGDATA"
+    else
+        # Keep a cluster the user created themselves; just drop the Solace objects.
+        if [ -f "$ENV_FILE" ]; then
+            set -a
+            . "$ENV_FILE"
+            set +a
+        fi
+        with_postgres 'for db in EarthDb PlayfabDb WebPortalDb; do
+            PGPASSWORD="$SOLACE_DB_PASSWORD" dropdb -h 127.0.0.1 -U solace --force --if-exists "$db" 2>/dev/null || true
+        done
+        PGPASSWORD="$SOLACE_DB_PASSWORD" psql -h 127.0.0.1 -U solace -d postgres -c "DROP ROLE IF EXISTS solace" 2>/dev/null || true'
+    fi
 
     rm -rf "$SOLACE_DIR" "$CONFIG_DIR" "$UBUNTU_HOME/.aspnet/DataProtection-Keys"
     if [ -n "${SOLACE_LAUNCHER:-}" ]; then
@@ -812,6 +844,7 @@ uninstall_solace() {
         echo "[Solace] Uninstalled."
         echo "The launcher was not installed through the Termux installer."
     fi
+    echo "[Solace] The Termux postgresql package was left installed."
     sleep 3
     exit 0
 }

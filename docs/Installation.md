@@ -1,8 +1,8 @@
 # Installation
 
-Solace can run with Docker on a desktop/server, or natively inside Ubuntu on Android
-using Termux. The Termux setup does not use Docker: PostgreSQL, the Aspire AppHost and
-the Solace services all run directly inside a proot-distro Ubuntu environment.
+Solace can run with Docker on a desktop/server, or natively on Android using Termux.
+The Termux setup does not use Docker: PostgreSQL runs in Termux itself, while the Aspire
+AppHost and the Solace services run inside a proot-distro Ubuntu environment.
 
 ## Termux (Android)
 
@@ -11,7 +11,7 @@ the Solace services all run directly inside a proot-distro Ubuntu environment.
 * **Termux** installed from [F-Droid](https://f-droid.org/packages/com.termux/) (the Play Store build is outdated)
 * Android 8 or newer, arm64 device
 * About 10 GB of free storage for the Ubuntu rootfs, .NET SDK, NuGet packages and the Solace build
-* A stable Wi-Fi connection for the first install (it downloads .NET, Java, PostgreSQL and NuGet packages)
+* A stable Wi-Fi connection for the first install (it downloads PostgreSQL, the .NET SDK, Java and NuGet packages)
 * The Minecraft Earth resource pack (`vanilla.zip`, see [Build.md](Build.md))
 
 ### Install
@@ -25,13 +25,14 @@ curl -fsSL https://raw.githubusercontent.com/Earth-Restored/Solace/refs/heads/as
 The installer:
 
 1. Installs `proot-distro` and an Ubuntu rootfs.
-2. Installs the .NET 11 SDK, the Aspire CLI, Java 21 and PostgreSQL inside Ubuntu.
-3. Clones the `aspire` branch to `~/Solace` inside Ubuntu.
-4. Creates the `solace` database role and the `EarthDb`, `PlayfabDb` and `WebPortalDb` databases.
+2. Sets up PostgreSQL in Termux and creates the `solace` role plus the `EarthDb`,
+   `PlayfabDb` and `WebPortalDb` databases.
+3. Installs the .NET 11 SDK, the Aspire CLI and Java 21 inside Ubuntu.
+4. Clones the `aspire` branch to `~/Solace` inside Ubuntu.
 5. Writes the runtime configuration to `~/.config/solace/termux.env`.
 6. Installs the `earth` launcher in Termux.
 
-The first install can take 10-30 minutes on a phone.
+The first install can take 30-90 minutes on a phone (longer on older devices).
 
 ### First start
 
@@ -92,13 +93,15 @@ Make sure Android's battery optimization does not kill Termux while the server i
 * **Update:** run `earth`, open **Update Solace**, and choose the `aspire` branch.
 * **Stop:** run `earth` and select **Start/Stop Server**.
 * **Uninstall:** run `earth uninstall` from Termux. This removes the Ubuntu-side files,
-  the databases, the configuration and the `earth` command. The proot-distro Ubuntu
-  installation itself is left in place.
+  the databases (and the PostgreSQL cluster if the installer created it), the
+  configuration and the `earth` command. The proot-distro Ubuntu installation and the
+  Termux `postgresql` package itself are left in place.
 
 ### Troubleshooting
 
 * Read the AppHost output from **Logs > Startup output** in the `earth` menu.
-* PostgreSQL logs are in `/var/log/postgresql/` inside Ubuntu.
+* PostgreSQL runs in Termux; its log file is
+  `$PREFIX/var/lib/postgresql/server.log`.
 * If the admin password cannot be found, run this inside Ubuntu:
 
   ```bash

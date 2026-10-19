@@ -78,6 +78,7 @@ if [ -n "$TERMUX_VERSION" ] || echo "$PREFIX" | grep -q "com.termux"; then
     command -v fzf >/dev/null 2>&1 || pkg install -y fzf || err "Failed to install fzf"
     command -v pgrep >/dev/null 2>&1 || pkg install -y procps || err "Failed to install procps"
     command -v curl >/dev/null 2>&1 || pkg install -y curl || err "Failed to install curl"
+    command -v initdb >/dev/null 2>&1 || pkg install -y postgresql || err "Failed to install postgresql"
     hash -r
     ok "Termux packages installed"
 
@@ -103,15 +104,67 @@ if [ -n "$TERMUX_VERSION" ] || echo "$PREFIX" | grep -q "com.termux"; then
         ok "Ubuntu installed"
     fi
 
-    print_step "4. CONFIGURING UBUNTU"
-    echo -e "  ${CYN}This step installs .NET 11, Java 21, PostgreSQL and the"
-    echo -e "  Solace source. It can take 10-30 minutes on a phone.${RST}"
+    print_step "4. CONFIGURING POSTGRESQL"
+    echo -e "  ${CYN}PostgreSQL runs in Termux itself; proot-distro cannot"
+    echo -e "  create or run database clusters.${RST}"
+    TERMUX_PGDATA="$PREFIX/var/lib/postgresql"
+
+    # Preserve the database password across reinstall/update runs.
+    TERMUX_ENV_FILE="$HOME/.config/solace/termux.env"
+    OLD_DB_PASSWORD="$(grep -E '^SOLACE_DB_PASSWORD=' "$TERMUX_ENV_FILE" 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d "'\"")"
+    DB_PASSWORD="${OLD_DB_PASSWORD:-$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n' | cut -c1-32)}"
+
+    if [ -f "$TERMUX_PGDATA/PG_VERSION" ]; then
+        skip "PostgreSQL cluster already exists"
+    else
+        echo -e "  ${CYN}Initializing the PostgreSQL cluster (this can take a few minutes).${RST}"
+        PWFILE="$PREFIX/tmp/solace-pg-pw.$$"
+        (umask 077; printf '%s\n' "$DB_PASSWORD" > "$PWFILE")
+        initdb -D "$TERMUX_PGDATA" -U solace -E UTF8 --locale=C.UTF-8 \
+            --auth-local=trust --auth-host=scram-sha-256 --pwfile="$PWFILE" >/dev/null \
+            || { rm -f "$PWFILE"; err "PostgreSQL initdb failed"; }
+        rm -f "$PWFILE"
+        # PostgreSQL needs a valid socket directory; use Termux's tmp.
+        printf '\nunix_socket_directories = %s\n' "'$PREFIX/tmp'" >> "$TERMUX_PGDATA/postgresql.conf"
+        touch "$TERMUX_PGDATA/.solace-managed"
+        ok "PostgreSQL cluster created"
+    fi
+
+    pg_ctl -D "$TERMUX_PGDATA" -l "$TERMUX_PGDATA/server.log" -w -t 300 start >/dev/null 2>&1 || true
+    for _ in $(seq 1 120); do
+        pg_isready -q -h 127.0.0.1 -p 5432 && break
+        sleep 1
+    done
+    pg_isready -q -h 127.0.0.1 -p 5432 || err "PostgreSQL failed to start. See $TERMUX_PGDATA/server.log"
+
+    PG_SOCKET="$PREFIX/tmp"
+    if ! psql -h "$PG_SOCKET" -U solace -d postgres -tAc "SELECT 1" >/dev/null 2>&1; then
+        psql -h "$PG_SOCKET" -d postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE solace WITH LOGIN SUPERUSER;" >/dev/null \
+            || err "Failed to create the solace database role"
+    fi
+    psql -h "$PG_SOCKET" -U solace -d postgres -v ON_ERROR_STOP=1 \
+        -c "ALTER ROLE solace WITH LOGIN SUPERUSER PASSWORD '$DB_PASSWORD';" >/dev/null \
+        || err "Failed to configure the solace database role"
+    for db in EarthDb PlayfabDb WebPortalDb; do
+        if ! psql -h "$PG_SOCKET" -U solace -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$db'" | grep -q 1; then
+            createdb -h "$PG_SOCKET" -U solace -O solace "$db" >/dev/null \
+                || err "Failed to create database $db"
+        fi
+    done
+    pg_ctl -D "$TERMUX_PGDATA" -w -t 60 stop -m fast >/dev/null 2>&1 || true
+    ok "PostgreSQL configured"
+
+    print_step "5. CONFIGURING UBUNTU"
+    echo -e "  ${CYN}This step installs .NET 11, Java 21 and the"
+    echo -e "  Solace source. It can take 30-90 minutes on a phone.${RST}"
 
     if ! proot-distro login ubuntu -- env \
         GITHUB_REPO="$GITHUB_REPO" \
         GITHUB_URL="$GITHUB_URL" \
         GITHUB_BRANCH="$GITHUB_BRANCH" \
         ASPIRE_CLI_VERSION="$ASPIRE_CLI_VERSION" \
+        DB_PASSWORD="$DB_PASSWORD" \
         bash -s <<'INNER_SETUP'
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
@@ -121,21 +174,21 @@ CONFIG_DIR="$HOME/.config/solace"
 ENV_FILE="$CONFIG_DIR/termux.env"
 SETTINGS_FILE="$CONFIG_DIR/termux-settings.json"
 
-echo "  [1/8] Updating Ubuntu packages"
+echo "  [1/7] Updating Ubuntu packages"
 apt-get update -qq
 
-echo "  [2/8] Installing system dependencies"
+echo "  [2/7] Installing system dependencies"
 apt-get install -y -qq \
     ca-certificates curl wget git unzip fzf openssl \
     openjdk-21-jre-headless libicu-dev \
-    postgresql postgresql-client procps psmisc iproute2 tzdata \
+    procps psmisc iproute2 tzdata \
     libfontconfig1 libfreetype6 >/dev/null
 
-echo "  [3/8] Installing .NET 11 SDK"
+echo "  [3/7] Installing .NET 11 SDK"
 install_dotnet() {
     curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
     if ! bash /tmp/dotnet-install.sh --channel 11.0 --install-dir "$HOME/.dotnet" --no-path; then
-        echo "  [3/8] Default channel failed, retrying with the preview channel"
+        echo "  [3/7] Default channel failed, retrying with the preview channel"
         bash /tmp/dotnet-install.sh --channel 11.0 --quality preview --install-dir "$HOME/.dotnet" --no-path
     fi
     rm -f /tmp/dotnet-install.sh
@@ -153,7 +206,7 @@ export DOTNET_NOLOGO=1
     exit 1
 }
 
-echo "  [4/8] Installing Aspire CLI"
+echo "  [4/7] Installing Aspire CLI"
 install_aspire_cli() {
     local attempt
     for attempt in 1 2 3; do
@@ -190,7 +243,7 @@ export DOTNET_GCHeapHardLimit=1073741824
 BASHRC
 fi
 
-echo "  [5/8] Fetching Solace ($GITHUB_BRANCH)"
+echo "  [5/7] Fetching Solace ($GITHUB_BRANCH)"
 if [ -d "$SOLACE_DIR/.git" ]; then
     git config --global --add safe.directory "$SOLACE_DIR" 2>/dev/null || true
     git -C "$SOLACE_DIR" fetch --prune origin "$GITHUB_BRANCH"
@@ -198,7 +251,7 @@ if [ -d "$SOLACE_DIR/.git" ]; then
         git -C "$SOLACE_DIR" checkout -b "$GITHUB_BRANCH" "origin/$GITHUB_BRANCH"
     fi
     if ! git -C "$SOLACE_DIR" merge --ff-only "origin/$GITHUB_BRANCH"; then
-        echo "  [5/8] Warning: local changes prevent a fast-forward. Keeping the existing checkout."
+        echo "  [5/7] Warning: local changes prevent a fast-forward. Keeping the existing checkout."
     fi
 else
     rm -rf "$SOLACE_DIR"
@@ -207,35 +260,7 @@ fi
 git -C "$SOLACE_DIR" config --add safe.directory "$SOLACE_DIR" 2>/dev/null || true
 git -C "$SOLACE_DIR" submodule update --init --recursive
 
-echo "  [6/8] Configuring PostgreSQL"
-PG_VERSION="$(ls /etc/postgresql 2>/dev/null | sort -V | tail -n1 || true)"
-if [ -z "$PG_VERSION" ]; then
-    echo "PostgreSQL was not installed correctly." >&2
-    exit 1
-fi
-if [ ! -d "/etc/postgresql/$PG_VERSION/main" ]; then
-    pg_createcluster "$PG_VERSION" main --start
-fi
-pg_ctlcluster "$PG_VERSION" main start 2>/dev/null || true
-for _ in $(seq 1 30); do
-    pg_isready -q && break
-    sleep 1
-done
-pg_isready -q || { echo "PostgreSQL failed to start." >&2; exit 1; }
-
-DB_PASSWORD="$(openssl rand -hex 16)"
-if su postgres -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='solace'\" | grep -q 1"; then
-    su postgres -c "psql -v ON_ERROR_STOP=1 -c \"ALTER ROLE solace WITH LOGIN PASSWORD '$DB_PASSWORD';\""
-else
-    su postgres -c "psql -v ON_ERROR_STOP=1 -c \"CREATE ROLE solace WITH LOGIN PASSWORD '$DB_PASSWORD';\""
-fi
-for db in EarthDb PlayfabDb WebPortalDb; do
-    if ! su postgres -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname='$db'\" | grep -q 1"; then
-        su postgres -c "createdb -O solace '$db'"
-    fi
-done
-
-echo "  [7/8] Writing Termux configuration"
+echo "  [6/7] Writing Termux configuration"
 mkdir -p "$CONFIG_DIR"
 
 # Preserve the EULA decision and public endpoint across reinstall/update runs.
@@ -268,6 +293,7 @@ write_env Termux__Enabled true
 write_env ASPIRE_ALLOW_UNSECURED_TRANSPORT true
 echo "" >> "$ENV_FILE"
 
+write_env SOLACE_DB_PASSWORD "$DB_PASSWORD"
 write_env ConnectionStrings__EarthDb "Host=127.0.0.1;Port=5432;Database=EarthDb;Username=solace;Password=$DB_PASSWORD"
 write_env ConnectionStrings__PlayfabDb "Host=127.0.0.1;Port=5432;Database=PlayfabDb;Username=solace;Password=$DB_PASSWORD"
 write_env ConnectionStrings__WebPortalDb "Host=127.0.0.1;Port=5432;Database=WebPortalDb;Username=solace;Password=$DB_PASSWORD"
@@ -319,7 +345,7 @@ cat > "$SETTINGS_FILE" <<EOF
 EOF
 chmod 600 "$SETTINGS_FILE"
 
-echo "  [8/8] Preparing static data"
+echo "  [7/7] Preparing static data"
 mkdir -p "$SOLACE_DIR/staticdata/resourcepacks"
 mkdir -p "$SOLACE_DIR/data/object_store"
 
@@ -332,7 +358,7 @@ INNER_SETUP
 
     ok "Ubuntu configured"
 
-    print_step "5. CREATING EARTH COMMAND"
+    print_step "6. CREATING EARTH COMMAND"
     mkdir -p "$PREFIX/bin"
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd || true)"
     if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/distros/Termux.sh" ]; then
