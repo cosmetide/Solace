@@ -52,8 +52,12 @@ The first install can take 30-90 minutes on a phone (longer on older devices).
    ```
 
 3. Select **Start/Stop Server** and accept the Minecraft EULA when prompted.
-4. Wait for the first build to finish. The first start compiles the whole solution and can
-   take a long time on a phone; subsequent starts are much faster.
+4. Wait for the first build to finish. The first start compiles the whole solution and
+   starts every service; on a phone this can take 15-20 minutes. The admin panel stays
+   unreachable until the web portal has started. Subsequent starts are much faster.
+   If `earth status` reports **STOPPED** during the first attempt, start it again from the
+   `earth` menu. The build and Aspire DCP caches are warm by then, so the second attempt
+   normally gets further and succeeds.
 5. Open the admin panel at <http://127.0.0.1:5000>.
 6. The initial admin account is `admin@solace.com`. Open **Settings > Show Admin Account**
    in the `earth` menu to read the generated password. Change it after the first login.
@@ -100,6 +104,10 @@ Make sure Android's battery optimization does not kill Termux while the server i
 ### Troubleshooting
 
 * Read the AppHost output from **Logs > Startup output** in the `earth` menu.
+* If <http://127.0.0.1:5000> is still unreachable, run `earth status`. `STARTING` means the
+  services are still coming up (the first start can take 15-20 minutes on a phone).
+  `STOPPED` means the AppHost exited; check the logs and start it again from the menu.
+  The Aspire dashboard URL (`earth status`) shows the live resource states.
 * PostgreSQL runs in Termux; its log file is
   `$PREFIX/var/lib/postgresql/server.log`.
 * If the admin password cannot be found, run this inside Ubuntu:

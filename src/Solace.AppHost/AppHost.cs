@@ -31,6 +31,14 @@ var testMode = builder.Configuration.GetValue<bool>("TestMode");
 // supplied through the ConnectionStrings__* environment variables.
 var termuxMode = builder.Configuration.GetValue<bool>("Termux:Enabled");
 
+if (termuxMode)
+{
+    // Phones are slow and the bundled DCP apiserver is a large Go binary that is read
+    // from cold storage during startup. Pre-warm it and widen Aspire's fixed 20 second
+    // Kubernetes readiness timeout so DCP can start reliably under proot-distro.
+    TermuxDcp.Prepare(builder.Services);
+}
+
 if (!termuxMode)
 {
     builder.AddDockerComposeEnvironment("solace-prod")
