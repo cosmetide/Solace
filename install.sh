@@ -80,6 +80,7 @@ if [ -n "$TERMUX_VERSION" ] || echo "$PREFIX" | grep -q "com.termux"; then
     command -v curl >/dev/null 2>&1 || pkg install -y curl || err "Failed to install curl"
     command -v ifconfig >/dev/null 2>&1 || pkg install -y net-tools || true
     command -v socat >/dev/null 2>&1 || pkg install -y socat || true
+    command -v termux-open-url >/dev/null 2>&1 || pkg install -y termux-tools || true
     command -v initdb >/dev/null 2>&1 || pkg install -y postgresql || err "Failed to install postgresql"
     hash -r
     ok "Termux packages installed"
@@ -396,17 +397,21 @@ INNER_SETUP
     echo -e "  ${CYN}Mode:${RST}    source"
     echo -e "  ${CYN}Branch:${RST}  $GITHUB_BRANCH"
     echo -e "  ${CYN}Server:${RST}  ~/Solace (inside Ubuntu)"
+    echo -e "  ${CYN}Portal:${RST}  http://$PUBLIC_IP_VALUE:5000"
+    echo -e "  ${CYN}Aspire:${RST}  http://$PUBLIC_IP_VALUE:18888"
     echo ""
     echo -e "${CYN}Next steps:${RST}"
     echo "  1. Download the resource pack and save it as:"
     echo "     ~/Solace/staticdata/resourcepacks/vanilla.zip (inside Ubuntu)"
     echo "  2. Run: earth"
     echo "  3. Accept the Minecraft EULA from the TUI"
-    echo "  4. Start the server, then open http://127.0.0.1:5000"
+    echo "  4. Start the server, then choose Launch Web Portal or run: earth portal"
     echo "  5. Check Settings > Show Admin Account for the initial password"
     echo ""
     echo -e "${CYN}Useful commands:${RST}"
     echo "  earth              TUI menu"
+    echo "  earth portal       open the Solace web portal"
+    echo "  earth aspire       open the Aspire panel"
     echo "  earth eula         accept the Minecraft EULA"
     echo "  earth uninstall    remove Solace completely"
     echo ""

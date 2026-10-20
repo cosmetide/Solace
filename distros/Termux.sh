@@ -99,6 +99,8 @@ show_help() {
     echo "  start          Start the server in the background"
     echo "  stop           Stop the server"
     echo "  status         Show the server status"
+    echo "  portal         Open the Solace web portal in a browser"
+    echo "  aspire         Open the Aspire panel in a browser"
     echo "  logs [NAME]    Show logs (optionally for one service)"
     echo "  eula           Accept the Minecraft EULA"
     echo "  eula --delete  Revoke the Minecraft EULA acceptance"
@@ -170,9 +172,6 @@ get_dashboard_url() {
     [ -n "$url" ] && printf '%s\n' "$url"
 }
 
-# The Aspire dashboard listens on a random loopback port that changes every time the
-# AppHost starts. socat keeps it reachable at a stable LAN port; the login token itself
-# still rotates and is printed by `earth status`.
 get_public_dashboard_url() {
     local url
     url="$(get_dashboard_url)"
@@ -348,6 +347,30 @@ open_url() {
     fi
     echo "Open in your browser: $url"
     sleep 3
+}
+
+launch_web_portal() {
+    if ! is_running; then
+        echo "[Solace] The web portal is not running. Start the server first."
+        return 1
+    fi
+    open_url "$ADMIN_URL"
+}
+
+launch_aspire_panel() {
+    local url
+    url="$(get_public_dashboard_url)"
+    [ -n "$url" ] || url="$(get_dashboard_url)"
+    if [ -z "$url" ]; then
+        echo "[Solace] The Aspire panel is not available yet. Start the server first."
+        return 1
+    fi
+    open_url "$url"
+}
+
+menu_item() {
+    local key="$1" label="$2"
+    printf '  │ %s[%s]%s %-40s│\n' "$CYN" "$key" "$RST" "$label"
 }
 
 get_version() {
@@ -1047,6 +1070,18 @@ if [ "${1:-}" = "eula" ]; then
     exit 0
 fi
 
+if [ "${1:-}" = "portal" ] || [ "${1:-}" = "web" ]; then
+    load_env
+    launch_web_portal || exit 1
+    exit 0
+fi
+
+if [ "${1:-}" = "aspire" ] || [ "${1:-}" = "dashboard" ]; then
+    load_env
+    launch_aspire_panel || exit 1
+    exit 0
+fi
+
 if [ "${1:-}" = "start" ]; then
     load_env
     if [ "${Shared__AcceptMinecraftEula:-false}" != "true" ]; then
@@ -1113,8 +1148,6 @@ fi
 
 # ─── MAIN DASHBOARD ───────────────────────────────────────
 
-# Internal worker: keeps the fixed LAN dashboard port pointed at the dashboard's
-# current random loopback port. Started in the background by start_server.
 if [ "${1:-}" = "__dashboard-forward" ]; then
     load_env
     dashboard_forward_loop
@@ -1140,15 +1173,15 @@ while true; do
     echo -e "  ─────────────────────────────────────────────"
     echo ""
     echo -e "  ┌─────────────────────────────────────────────┐"
-    echo -e "  │ ${CYN}[1]${RST} Start/Stop Server                       │"
-    echo -e "  │ ${CYN}[2]${RST} Open Aspire Dashboard                   │"
-    echo -e "  │ ${CYN}[3]${RST} Open Admin Panel                        │"
-    echo -e "  │ ${CYN}[4]${RST} Logs                                    │"
-    echo -e "  │ ${CYN}[5]${RST} Process Explorer                        │"
-    echo -e "  │ ${CYN}[6]${RST} Update Solace                           │"
-    echo -e "  │ ${CYN}[7]${RST} Settings                                │"
-    echo -e "  │ ${CYN}[8]${RST} Information                             │"
-    echo -e "  │ ${CYN}[0]${RST} Exit                                    │"
+    menu_item 1 "Start/Stop Server"
+    menu_item 2 "Launch Web Portal"
+    menu_item 3 "Launch Aspire Panel"
+    menu_item 4 "Logs"
+    menu_item 5 "Process Explorer"
+    menu_item 6 "Update Solace"
+    menu_item 7 "Settings"
+    menu_item 8 "Information"
+    menu_item 0 "Exit"
     echo -e "  └─────────────────────────────────────────────┘"
     echo -e "  ${YLW}Solace Aspire (Termux - $INSTALL_BRANCH)${RST}"
 
@@ -1165,19 +1198,21 @@ while true; do
             fi
             ;;
         2)
-            DASH_URL="$(get_public_dashboard_url)"
-            [ -z "$DASH_URL" ] && DASH_URL="$(get_dashboard_url)"
-            if [ -n "$DASH_URL" ]; then
-                open_url "$DASH_URL"
-            else
-                clear; show_banner; section_title "ASPIRE DASHBOARD"
-                echo "  The dashboard URL is not available yet."
-                echo "  Start the server and try again."
+            if ! launch_web_portal; then
+                clear; show_banner; section_title "WEB PORTAL"
+                echo "  Start the server, then try again."
                 printf "Press ENTER..."
                 pause
             fi
             ;;
-        3) open_url "$ADMIN_URL" ;;
+        3)
+            if ! launch_aspire_panel; then
+                clear; show_banner; section_title "ASPIRE PANEL"
+                echo "  Start the server, then try again."
+                printf "Press ENTER..."
+                pause
+            fi
+            ;;
         4) logs_menu ;;
         5) process_viewer ;;
         6) update_solace ;;

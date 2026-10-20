@@ -61,6 +61,7 @@ The first install can take 30-90 minutes on a phone (longer on older devices).
    normally gets further and succeeds.
 5. Open the admin panel at the URL printed by `earth status` (for example
    <http://192.168.1.50:5000>). On the phone itself <http://127.0.0.1:5000> also works.
+   From the `earth` menu choose **Launch Web Portal**, or run `earth portal`.
 6. The initial admin account is `admin@solace.com`. Open **Settings > Show Admin Account**
    in the `earth` menu to read the generated password. Change it after the first login.
 7. `earth status` also prints the **Aspire dashboard** URL. That dashboard is the
@@ -70,7 +71,8 @@ The first install can take 30-90 minutes on a phone (longer on older devices).
    and `earth` forwards the fixed LAN port `18888` to it across restarts. The login token
    still changes on every start, so use the link from `earth status` rather than
    bookmarking the bare address. Anyone on the same network with the current link can
-   open the dashboard.
+   open the dashboard. From the `earth` menu choose **Launch Aspire Panel**, or run
+   `earth aspire`.
 
 The `earth` menu runs in Termux, while the server runs in its own background proot session.
 Exiting the menu or closing the terminal window does not stop the server; use
