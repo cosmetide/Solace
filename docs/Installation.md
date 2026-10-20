@@ -58,12 +58,14 @@ The first install can take 30-90 minutes on a phone (longer on older devices).
    If `earth status` reports **STOPPED** during the first attempt, start it again from the
    `earth` menu. The build and Aspire DCP caches are warm by then, so the second attempt
    normally gets further and succeeds.
-5. Open the admin panel at <http://127.0.0.1:5000>.
+5. Open the admin panel at the URL printed by `earth status` (for example
+   <http://192.168.1.50:5000>). On the phone itself <http://127.0.0.1:5000> also works.
 6. The initial admin account is `admin@solace.com`. Open **Settings > Show Admin Account**
    in the `earth` menu to read the generated password. Change it after the first login.
 7. `earth status` also prints the **Aspire dashboard** URL. That dashboard is the
    development resource/telemetry UI (separate from the Solace admin panel) and gets a
-   new URL on each start; `earth status` always shows the current link.
+   new URL on each start; `earth status` always shows the current link. The Aspire
+   dashboard itself is loopback-only and is not exposed to the LAN.
 
 The `earth` menu runs in Termux, while the server runs in its own background proot session.
 Exiting the menu or closing the terminal window does not stop the server; use
@@ -72,15 +74,23 @@ Exiting the menu or closing the terminal window does not stop the server; use
 
 ### Playing from another device
 
-By default the advertised endpoints use `127.0.0.1`, which only works on the phone itself.
-The services listen on the network, but the URLs shown in the portal and used by the game
-must point at an address other devices can reach. To play from a PC or another phone on the
-same network:
+The Termux installer detects the phone's Wi-Fi address and writes it into the advertised
+endpoints. The public services bind directly to their ports on all interfaces, so another
+device on the same network can connect without a reverse proxy. If the address is wrong,
+or the phone gets a new address from the router, update it:
 
-1. Find the Android device's LAN IP address (for example `192.168.1.50`).
+1. Find the Android device's LAN IP address (for example `192.168.1.50`). In Termux,
+   run `ifconfig wlan0` and read the `inet` value.
 2. In the `earth` menu, open **Settings > Change Public IP** and enter that address.
-3. Restart the server.
-4. Use the same address in the Minecraft Earth patcher.
+3. Restart the server (`earth stop` then `earth start`).
+4. On the other device, open `http://<that-address>:5000` and use the same address in
+   the Minecraft Earth patcher.
+
+`earth status` prints the admin panel URL for the configured address. Both devices must
+be on the same subnet; guest Wi-Fi networks often enable **client/AP isolation**, which
+blocks device-to-device connections even when both are online. Disable isolation on the
+router, or use a regular Wi-Fi network/hotspot. A DHCP reservation for the phone avoids
+updating the address later.
 
 The individual services listen on these ports; no nginx reverse proxy is used:
 
@@ -93,7 +103,8 @@ The individual services listen on these ports; no nginx reverse proxy is used:
 | CDN            | 8090  |
 | Buildplates    | 19132 and up (TCP and UDP) |
 
-Make sure Android's battery optimization does not kill Termux while the server is running.
+The Aspire dashboard remains loopback-only; open it on the phone. Android's battery
+optimization must not kill Termux while the server is running.
 
 ### Updating and uninstalling
 
@@ -107,6 +118,16 @@ Make sure Android's battery optimization does not kill Termux while the server i
 ### Troubleshooting
 
 * Read the AppHost output from **Logs > Startup output** in the `earth` menu.
+* If the panel is unreachable from another device, test from the phone first:
+
+  ```bash
+  curl -I http://<phone-LAN-IP>:5000/
+  ```
+
+  A 200/302 response means the service is listening on the LAN; the problem is then
+  router AP/client isolation or a firewall between the two devices. `earth status`
+  shows the configured address. If the phone itself cannot reach its LAN address, check
+  the endpoint in **Settings > Change Public IP** and restart.
 * If <http://127.0.0.1:5000> is still unreachable, run `earth status`. `STARTING` means the
   services are still coming up (the first start can take 15-20 minutes on a phone).
   `STOPPED` means the AppHost exited; check the logs and start it again from the menu.
