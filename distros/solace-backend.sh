@@ -173,6 +173,17 @@ is_running() {
     return 1
 }
 
+ensure_prebuilt_compat() {
+    # Older prebuilt AppHost binaries contain the GitHub Actions workspace path.
+    # The install lives at /root/Solace inside Ubuntu, so provide a compatibility link.
+    [ -f "$SOLACE_DIR/.termux-prebuilt" ] || return 0
+    local legacy="$PROOT_ROOTFS/home/runner/work/Solace/Solace"
+    if [ ! -e "$legacy" ] && [ ! -L "$legacy" ]; then
+        mkdir -p "$(dirname "$legacy")" 2>/dev/null || return 0
+        ln -s /root/Solace "$legacy" 2>/dev/null || true
+    fi
+}
+
 json_escape() {
     printf '%s' "$1" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
@@ -220,7 +231,7 @@ status_json() {
     printf '{"state":"%s","running":%s,"starting":%s,"eulaAccepted":%s,"resourcePack":%s,"installMode":"%s","version":"%s","branch":"%s","publicIp":"%s","portalUrl":"%s","dashboardUrl":"%s","adminEmail":"admin@solace.com","launcherPort":%s,"services":%s}\n' \
         "$(json_escape "$state")" "$running" "$starting" "$eula" "$resource" \
         "$(json_escape "$mode")" "$(json_escape "$version")" "$(json_escape "$branch")" \
-        "$(json_escape "$PUBLIC_IP")" "$(json_escape "$ADMIN_URL")" \
+        "$(json_escape "$PUBLIC_IP")" "$(json_escape "http://$PUBLIC_IP:5000")" \
         "$(json_escape "$dashboard")" "$LAUNCHER_PORT" "$services"
 }
 
@@ -342,6 +353,7 @@ with_postgres() {
 }
 
 start_server() {
+    ensure_prebuilt_compat
     if is_process_alive; then
         return 0
     fi
@@ -540,6 +552,31 @@ INNER
     echo "Updated to ${version:-unknown}. The next start will rebuild the projects."
 }
 
+switch_branch() {
+    local new_branch="${1:-}"
+    [ -n "$new_branch" ] || { echo "A branch name is required." >&2; return 1; }
+    case "$new_branch" in
+        -*|.*|*..*|*[!A-Za-z0-9._/-]*|*/|*//*)
+            echo "Invalid branch name." >&2
+            return 1
+            ;;
+    esac
+    load_env
+    [ "$new_branch" = "$INSTALL_BRANCH" ] && { echo "Already on $new_branch."; return 0; }
+
+    set_env_value "SOLACE_BRANCH" "$new_branch"
+    save_settings_value "branch" "$new_branch"
+    INSTALL_BRANCH="$new_branch"
+    update_solace
+}
+
+processes() {
+    ps -eo pid,ppid,etime,cmd --no-headers 2>/dev/null \
+        | grep -E 'aspire|Solace|dotnet|java' \
+        | grep -v 'grep -E' \
+        || echo "No Solace processes are running."
+}
+
 change_public_ip() {
     local new_ip="${1:-}"
     [ -n "$new_ip" ] || { echo "A public IP or hostname is required." >&2; return 1; }
@@ -630,6 +667,16 @@ case "${1:-}" in
         stop_server
         echo "Solace stopped."
         ;;
+    restart)
+        load_env
+        if [ "${Shared__AcceptMinecraftEula:-false}" != "true" ]; then
+            echo "The Minecraft EULA has not been accepted." >&2
+            exit 42
+        fi
+        stop_server
+        start_server || exit 1
+        echo "Solace is restarting."
+        ;;
     status)
         load_env
         if [ "${2:-}" = "--json" ]; then
@@ -692,6 +739,12 @@ case "${1:-}" in
     set-public-ip)
         change_public_ip "${2:-}"
         ;;
+    switch-branch)
+        switch_branch "${2:-}"
+        ;;
+    processes)
+        processes
+        ;;
     reset-databases)
         reset_databases "${2:-}"
         ;;
@@ -706,8 +759,9 @@ case "${1:-}" in
         echo "ok"
         ;;
     help|--help|-h)
-        echo "Solace backend. Commands: start, stop, status [--json], logs [service] [lines], update,"
-        echo "eula [accept|delete], admin-password, set-public-ip <ip>, reset-databases --yes, uninstall --yes."
+        echo "Solace backend. Commands: start, stop, restart, status [--json], logs [service] [lines], update,"
+        echo "eula [accept|delete], admin-password, set-public-ip <ip>, switch-branch <branch>, processes,"
+        echo "reset-databases --yes, uninstall --yes."
         ;;
     *)
         echo "Unknown backend command: ${1:-}" >&2

@@ -3,175 +3,291 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#070b24">
+  <meta name="theme-color" content="#06152f">
   <title>Solace Launcher</title>
   <link rel="icon" href="/assets/branding.png">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <div class="backdrop" aria-hidden="true"></div>
+  <div class="page-glow" aria-hidden="true"></div>
 
-  <header class="topbar">
-    <a class="brand" href="/" aria-label="Solace Launcher home">
-      <img src="/assets/branding.png" alt="Solace Project">
-    </a>
-    <div class="brand-text">
-      <span>Solace</span>
-      <strong>Launcher</strong>
-    </div>
-    <div class="status-pill" id="status-pill">
-      <span class="status-dot"></span>
-      <span id="status-label">Checking…</span>
-    </div>
-  </header>
-
-  <main>
-    <section class="hero">
-      <div class="hero-copy">
-        <p class="eyebrow">Termux + Aspire control deck</p>
-        <h1>Your world,<br><em>ready when you are.</em></h1>
-        <p class="lede">
-          Start the server, open the Solace portal, and keep an eye on the Aspire
-          stack without leaving your browser.
-        </p>
-        <div class="hero-actions">
-          <button class="button primary" id="start-button">Start server</button>
-          <button class="button ghost" id="stop-button">Stop server</button>
-          <a class="button link" id="portal-button" href="#" target="_blank" rel="noopener">Open portal <span>↗</span></a>
-        </div>
-        <p class="hint" id="hero-hint">Loading launcher status…</p>
+  <div class="shell">
+    <header class="masthead">
+      <div class="logo-block">
+        <img class="logo" src="/assets/branding.png" alt="Solace">
+        <p class="logo-caption">Termux control panel</p>
       </div>
-      <div class="hero-mark" aria-hidden="true">
-        <div class="orb"></div>
-        <img src="/assets/branding.png" alt="">
-      </div>
-    </section>
 
-    <section class="notice hidden" id="eula-notice">
-      <div>
-        <strong>Minecraft EULA</strong>
-        <p>The server cannot start until the Minecraft EULA is accepted.</p>
-      </div>
-      <button class="button small primary" id="accept-eula">Accept EULA</button>
-    </section>
-
-    <section class="notice warning hidden" id="pack-notice">
-      <div>
-        <strong>Resource pack missing</strong>
-        <p>Add <code>vanilla.zip</code> to <code>staticdata/resourcepacks</code> for textures and previews.</p>
-      </div>
-    </section>
-
-    <div class="grid">
-      <section class="card status-card">
-        <div class="card-heading">
-          <div>
-            <p class="eyebrow">Runtime</p>
-            <h2>Server status</h2>
-          </div>
-          <span class="state-badge" id="state-badge">Unknown</span>
-        </div>
-        <div class="facts">
-          <div><span>Version</span><strong id="fact-version">—</strong></div>
-          <div><span>Branch</span><strong id="fact-branch">—</strong></div>
-          <div><span>Install</span><strong id="fact-mode">—</strong></div>
-          <div><span>Public IP</span><strong id="fact-ip">—</strong></div>
-        </div>
-        <div class="progress" id="startup-progress" aria-hidden="true"><span></span></div>
-        <p class="muted" id="status-copy">The launcher is checking the local server.</p>
-      </section>
-
-      <section class="card">
-        <div class="card-heading">
-          <div>
-            <p class="eyebrow">Shortcuts</p>
-            <h2>Jump in</h2>
-          </div>
-        </div>
-        <div class="link-list">
-          <a class="shortcut" id="dashboard-link" href="#" target="_blank" rel="noopener">
-            <span class="shortcut-icon">◈</span>
-            <span><strong>Aspire dashboard</strong><small>Service health and live logs</small></span>
-            <span class="chevron">↗</span>
-          </a>
-          <a class="shortcut" id="portal-link" href="#" target="_blank" rel="noopener">
-            <span class="shortcut-icon">▣</span>
-            <span><strong>Solace web portal</strong><small>Admin panel and buildplates</small></span>
-            <span class="chevron">↗</span>
-          </a>
-          <button class="shortcut as-button" id="password-button">
-            <span class="shortcut-icon">✦</span>
-            <span><strong>Admin account</strong><small>Reveal the generated password</small></span>
-            <span class="chevron">→</span>
-          </button>
-        </div>
-        <div class="admin-secret hidden" id="admin-secret">
-          <span>admin@solace.com</span>
-          <code id="admin-password">••••••••</code>
-        </div>
-      </section>
-
-      <section class="card services-card">
-        <div class="card-heading">
-          <div>
-            <p class="eyebrow">Endpoints</p>
-            <h2>Services</h2>
-          </div>
-          <span class="muted small">LAN</span>
-        </div>
-        <div class="service-list" id="service-list"></div>
-      </section>
-
-      <section class="card settings-card">
-        <div class="card-heading">
-          <div>
-            <p class="eyebrow">Configuration</p>
-            <h2>Launcher settings</h2>
-          </div>
-        </div>
-        <form id="ip-form" class="field-row">
-          <label for="public-ip">Public endpoint</label>
-          <div class="input-row">
-            <input id="public-ip" name="ip" autocomplete="off" spellcheck="false" placeholder="192.168.1.50">
-            <button class="button small primary" type="submit">Save</button>
-          </div>
-          <p class="muted">Use the phone's LAN IP so other devices can join. Restart the server afterwards.</p>
-        </form>
-        <div class="settings-actions">
-          <button class="button small ghost" id="update-button">Update Solace</button>
-          <button class="button small ghost" id="logs-button">Open logs</button>
-        </div>
-      </section>
-    </div>
-
-    <section class="log-panel" id="log-panel">
-      <div class="card-heading">
+      <div class="server-state" id="server-state">
+        <span class="state-dot" aria-hidden="true"></span>
         <div>
-          <p class="eyebrow">Diagnostics</p>
-          <h2>Logs</h2>
-        </div>
-        <div class="log-actions">
-          <select id="log-source" aria-label="Log source">
-            <option value="startup">Startup</option>
-            <option value="web-portal">Web portal</option>
-            <option value="api-server">API server</option>
-            <option value="auth-server">Auth server</option>
-            <option value="locator">Locator</option>
-            <option value="cdn">CDN</option>
-            <option value="event-bus">Event bus</option>
-            <option value="object-store">Object store</option>
-          </select>
-          <button class="button small ghost" id="refresh-logs">Refresh</button>
+          <p class="state-label" id="state-label">Checking server</p>
+          <p class="state-note" id="state-note">Reading local status</p>
         </div>
       </div>
-      <pre id="log-output">Select a log and press Refresh.</pre>
-    </section>
-  </main>
 
-  <footer>
-    <span><strong>Solace Launcher</strong> · port 7089</span>
-    <span>Uninstall with <code>solace -u</code></span>
-  </footer>
+      <div class="server-controls" role="group" aria-label="Server controls">
+        <button class="control start" id="start-button" disabled>Start Server</button>
+        <button class="control restart" id="restart-button" disabled>Restart</button>
+        <button class="control stop" id="stop-button" disabled>Stop</button>
+      </div>
+
+      <div class="panel-controls">
+        <a class="panel-button" id="dashboard-button" href="#" target="_blank" rel="noopener">Open Aspire Panel</a>
+        <a class="panel-button" id="portal-button" href="#" target="_blank" rel="noopener">Open Web Panel</a>
+      </div>
+    </header>
+
+    <nav class="tabs" aria-label="Launcher sections">
+      <button class="tab active" type="button" data-tab="overview">Overview</button>
+      <button class="tab" type="button" data-tab="files">Files</button>
+      <button class="tab" type="button" data-tab="logs">Logs</button>
+      <button class="tab" type="button" data-tab="settings">Settings</button>
+    </nav>
+
+    <div class="notice hidden" id="eula-notice">
+      <div>
+        <strong>Minecraft EULA acceptance required</strong>
+        <p>The server cannot start until the Minecraft EULA has been accepted.</p>
+      </div>
+      <button class="button primary small" id="accept-eula-button" type="button">Accept EULA</button>
+    </div>
+
+    <main>
+      <section class="tab-panel active" id="panel-overview">
+        <div class="overview-grid">
+          <article class="card server-card">
+            <div class="card-heading">
+              <div>
+                <p class="eyebrow">Runtime</p>
+                <h2>Server overview</h2>
+              </div>
+              <span class="badge" id="runtime-badge">Unknown</span>
+            </div>
+            <dl class="facts">
+              <div><dt>Version</dt><dd id="fact-version">Not available</dd></div>
+              <div><dt>Branch</dt><dd id="fact-branch">Not available</dd></div>
+              <div><dt>Install type</dt><dd id="fact-mode">Not available</dd></div>
+              <div><dt>Public endpoint</dt><dd id="fact-ip">Not available</dd></div>
+              <div><dt>Launcher port</dt><dd id="fact-port">7089</dd></div>
+              <div><dt>Resource pack</dt><dd id="fact-pack">Not installed</dd></div>
+            </dl>
+            <p class="status-copy" id="status-copy">Reading the local Solace installation.</p>
+          </article>
+
+          <article class="card admin-card">
+            <div class="card-heading">
+              <div>
+                <p class="eyebrow">Access</p>
+                <h2>Admin account</h2>
+              </div>
+            </div>
+            <p class="muted">The initial web portal account is generated on the first server start.</p>
+            <div class="admin-account">
+              <span>admin@solace.com</span>
+              <code id="admin-password">Password hidden</code>
+            </div>
+            <button class="button secondary" id="password-button" type="button">Reveal Password</button>
+          </article>
+        </div>
+
+        <article class="card resource-card">
+          <div class="card-heading">
+            <div>
+              <p class="eyebrow">World assets</p>
+              <h2>Vanilla resource pack</h2>
+            </div>
+            <span class="badge" id="pack-badge">Missing</span>
+          </div>
+          <div class="upload-zone" id="pack-drop">
+            <input id="pack-input" type="file" accept=".zip,application/zip" hidden>
+            <p class="upload-title" id="pack-title">Drop vanilla.zip here</p>
+            <p class="upload-note" id="pack-note">Or choose the file from this device. It is saved directly to <code>staticdata/resourcepacks/vanilla.zip</code> inside Solace.</p>
+            <button class="button primary" id="pack-button" type="button">Choose vanilla.zip</button>
+            <p class="upload-status" id="pack-status"></p>
+          </div>
+        </article>
+      </section>
+
+      <section class="tab-panel" id="panel-files">
+        <article class="card file-card">
+          <div class="card-heading file-heading">
+            <div>
+              <p class="eyebrow">Ubuntu / Solace</p>
+              <h2>File manager</h2>
+            </div>
+            <button class="button secondary small" id="files-refresh" type="button">Refresh</button>
+          </div>
+
+          <div class="breadcrumb" id="breadcrumb" aria-label="Current folder"></div>
+
+          <div class="file-toolbar">
+            <input id="file-input" type="file" hidden>
+            <button class="button secondary small" id="upload-button" type="button">Upload File</button>
+            <button class="button secondary small" id="new-folder-button" type="button">New Folder</button>
+            <label class="toggle"><input type="checkbox" id="show-hidden"> Show hidden and build files</label>
+          </div>
+
+          <div class="table-wrap">
+            <table class="file-table">
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th scope="col">Size</th>
+                  <th scope="col">Modified</th>
+                  <th scope="col">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="file-list"></tbody>
+            </table>
+          </div>
+          <p class="muted small file-note">Browsing is restricted to <code>/root/Solace</code>. The <code>..</code> entry only moves back toward that folder.</p>
+        </article>
+      </section>
+
+      <section class="tab-panel" id="panel-logs">
+        <article class="card log-card">
+          <div class="card-heading log-heading">
+            <div>
+              <p class="eyebrow">Diagnostics</p>
+              <h2>Logs</h2>
+            </div>
+            <div class="log-controls">
+              <select id="log-source" aria-label="Log source">
+                <option value="startup">Startup output</option>
+                <option value="web-portal">Web portal</option>
+                <option value="api-server">API server</option>
+                <option value="auth-server">Auth server</option>
+                <option value="locator">Locator</option>
+                <option value="cdn">CDN</option>
+                <option value="event-bus">Event bus</option>
+                <option value="object-store">Object store</option>
+              </select>
+              <select id="log-lines" aria-label="Log line count">
+                <option value="200">200 lines</option>
+                <option value="500" selected>500 lines</option>
+                <option value="1000">1000 lines</option>
+              </select>
+              <button class="button secondary small" id="logs-refresh" type="button">Refresh</button>
+            </div>
+          </div>
+          <pre class="terminal" id="log-output">Select a source and refresh to read the log.</pre>
+        </article>
+
+        <article class="card log-card">
+          <div class="card-heading log-heading">
+            <div>
+              <p class="eyebrow">Local processes</p>
+              <h2>Solace processes</h2>
+            </div>
+            <button class="button secondary small" id="processes-refresh" type="button">Refresh</button>
+          </div>
+          <pre class="terminal short" id="process-output">Press Refresh to list the active Solace processes.</pre>
+        </article>
+      </section>
+
+      <section class="tab-panel" id="panel-settings">
+        <div class="settings-grid">
+          <article class="card">
+            <div class="card-heading">
+              <div>
+                <p class="eyebrow">Network</p>
+                <h2>Public endpoint</h2>
+              </div>
+            </div>
+            <form id="ip-form" class="form-stack">
+              <label for="public-ip">IP address or hostname</label>
+              <div class="input-row">
+                <input id="public-ip" name="ip" autocomplete="off" spellcheck="false" placeholder="192.168.1.50">
+                <button class="button primary small" type="submit">Save</button>
+              </div>
+              <p class="muted small">Use the phone's LAN address for other devices. Restart the server after changing it.</p>
+            </form>
+          </article>
+
+          <article class="card">
+            <div class="card-heading">
+              <div>
+                <p class="eyebrow">Source</p>
+                <h2>Solace branch</h2>
+              </div>
+            </div>
+            <form id="branch-form" class="form-stack">
+              <label for="branch-name">Git branch</label>
+              <div class="input-row">
+                <input id="branch-name" name="branch" autocomplete="off" spellcheck="false" placeholder="main">
+                <button class="button primary small" type="submit">Switch</button>
+              </div>
+              <p class="muted small">Switching branches stops the server and updates the checkout. A rebuild may be required.</p>
+            </form>
+          </article>
+
+          <article class="card">
+            <div class="card-heading">
+              <div>
+                <p class="eyebrow">License</p>
+                <h2>Minecraft EULA</h2>
+              </div>
+            </div>
+            <p class="muted" id="eula-state">Checking EULA status.</p>
+            <div class="button-row">
+              <button class="button secondary small" id="settings-accept-eula" type="button">Accept EULA</button>
+              <button class="button secondary small" id="revoke-eula" type="button">Revoke Acceptance</button>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="card-heading">
+              <div>
+                <p class="eyebrow">Maintenance</p>
+                <h2>Server maintenance</h2>
+              </div>
+            </div>
+            <div class="button-row">
+              <button class="button secondary small" id="update-button" type="button">Update Solace</button>
+              <button class="button danger small" id="reset-button" type="button">Reset Databases</button>
+            </div>
+            <p class="muted small">Updates stop the server and may trigger a source rebuild. Resetting databases permanently removes profiles, buildplates, and portal accounts.</p>
+          </article>
+        </div>
+
+        <article class="card settings-footer-card">
+          <div>
+            <p class="eyebrow">Command line</p>
+            <h2>Uninstall Solace</h2>
+            <p class="muted">Run <code>solace -u</code> in Termux to remove Solace, its databases, and its configuration.</p>
+          </div>
+          <div>
+            <p class="eyebrow">About</p>
+            <h2>Solace Launcher</h2>
+            <p class="muted" id="about-line">Local control panel on port 7089.</p>
+          </div>
+        </article>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>Solace Launcher</span>
+      <span>Files are limited to the Solace checkout inside proot Ubuntu.</span>
+    </footer>
+  </div>
+
+  <div class="modal hidden" id="editor-modal" role="dialog" aria-modal="true" aria-labelledby="editor-title">
+    <div class="modal-card">
+      <div class="modal-heading">
+        <div>
+          <p class="eyebrow">Text editor</p>
+          <h2 id="editor-title">Edit file</h2>
+        </div>
+        <button class="icon-button" id="editor-close" type="button" aria-label="Close editor">Close</button>
+      </div>
+      <textarea id="editor-text" spellcheck="false" wrap="off"></textarea>
+      <div class="modal-actions">
+        <button class="button secondary" id="editor-cancel" type="button">Cancel</button>
+        <button class="button primary" id="editor-save" type="button">Save File</button>
+      </div>
+    </div>
+  </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="/app.js"></script>

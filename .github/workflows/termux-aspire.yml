@@ -34,15 +34,32 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      # Aspire embeds the absolute project paths in the generated AppHost
+      # metadata. Build from /root/Solace, which is the portable install path
+      # used inside the Termux Ubuntu rootfs, instead of the runner workspace.
+      - name: Stage source at install path
+        run: |
+          set -euo pipefail
+          sudo rm -rf /root/Solace
+          sudo mkdir -p /root/Solace
+          sudo chown -R "$USER:$USER" /root/Solace
+          sudo chmod 755 /root
+          rsync -a --delete --exclude '.git' ./ /root/Solace/
+
       - name: Restore
-        run: dotnet restore src/Solace.AppHost/Solace.AppHost.csproj
+        run: |
+          cd /root/Solace
+          dotnet restore src/Solace.AppHost/Solace.AppHost.csproj
 
       - name: Build
-        run: dotnet build src/Solace.AppHost/Solace.AppHost.csproj --configuration Debug --no-restore
+        run: |
+          cd /root/Solace
+          dotnet build src/Solace.AppHost/Solace.AppHost.csproj --configuration Debug --no-restore
 
       - name: Package
         run: |
           set -euo pipefail
+          cd /root/Solace
           rm -rf package termux-aspire.zip termux-aspire.zip.sha256
           mkdir -p package
           for bin in src/*/bin; do
@@ -52,7 +69,8 @@ jobs:
             cp -a "$bin" "package/$project_dir/"
           done
           find package -type f -name '*.pdb' -delete
-          (cd package && zip -qr ../termux-aspire.zip .)
+          (cd package && zip -qr "$GITHUB_WORKSPACE/termux-aspire.zip" .)
+          cd "$GITHUB_WORKSPACE"
           sha256sum termux-aspire.zip > termux-aspire.zip.sha256
 
       - name: Upload artifact

@@ -447,13 +447,24 @@ INNER_SETUP
     ROOTFS_SOURCE="$PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs/root/Solace"
     LAUNCHER_SOURCE=""
 
+    # Releases built before the portable-build change contain the GitHub Actions
+    # checkout path in their generated project metadata. Keep that path valid for
+    # existing prebuilt bundles without affecting source installs.
+    if [ -f "$ROOTFS_SOURCE/.termux-prebuilt" ]; then
+        LEGACY_PROJECT_ROOT="$PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs/home/runner/work/Solace/Solace"
+        if [ ! -e "$LEGACY_PROJECT_ROOT" ] && [ ! -L "$LEGACY_PROJECT_ROOT" ]; then
+            mkdir -p "$(dirname "$LEGACY_PROJECT_ROOT")"
+            ln -s /root/Solace "$LEGACY_PROJECT_ROOT" 2>/dev/null || true
+        fi
+    fi
+
     if [ -f "$ROOTFS_SOURCE/distros/solace" ]; then
         LAUNCHER_SOURCE="$ROOTFS_SOURCE"
     elif [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/distros/solace" ]; then
         LAUNCHER_SOURCE="$SCRIPT_DIR"
     fi
     [ -n "$LAUNCHER_SOURCE" ] || err "Launcher files are missing from the Ubuntu checkout. Re-run install.sh."
-    for launcher_file in distros/solace distros/solace-backend.sh distros/solace_launcher.py distros/launcher/index.html; do
+    for launcher_file in distros/solace distros/solace-backend.sh distros/solace_launcher.py distros/launcher/index.html distros/launcher/app.js distros/launcher/styles.css; do
         [ -f "$LAUNCHER_SOURCE/$launcher_file" ] || err "Launcher file missing: $launcher_file. Re-run install.sh."
     done
 
