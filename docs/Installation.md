@@ -61,6 +61,9 @@ The first install can take 30-90 minutes on a phone (longer on older devices).
 5. Open the admin panel at <http://127.0.0.1:5000>.
 6. The initial admin account is `admin@solace.com`. Open **Settings > Show Admin Account**
    in the `earth` menu to read the generated password. Change it after the first login.
+7. `earth status` also prints the **Aspire dashboard** URL. That dashboard is the
+   development resource/telemetry UI (separate from the Solace admin panel) and gets a
+   new URL on each start; `earth status` always shows the current link.
 
 The `earth` menu runs in Termux, while the server runs in its own background proot session.
 Exiting the menu or closing the terminal window does not stop the server; use
