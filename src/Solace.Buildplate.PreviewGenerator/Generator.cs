@@ -1,0 +1,133 @@
+﻿using Microsoft.Extensions.Logging;
+using Solace.Common.Utils;
+using Solace.Buildplate.PreviewGenerator.Registry;
+using System.Text.Json;
+
+namespace Solace.Buildplate.PreviewGenerator;
+
+public static partial class Generator
+{
+    private const int CHUNK_RADIUS = 2;
+
+    public static string Generate(Stream stream, ILogger logger)
+    {
+        var serverDataZip = ServerDataZip.Read(stream);
+
+        var sideLength = (CHUNK_RADIUS * 2) + 1;
+        var chunks = new List<Chunk>(sideLength * sideLength);
+
+        for (var chunkX = -CHUNK_RADIUS; chunkX < CHUNK_RADIUS; chunkX++)
+        {
+            for (var chunkZ = -CHUNK_RADIUS; chunkZ < CHUNK_RADIUS; chunkZ++)
+            {
+                var chunk = Chunk.Read(serverDataZip.GetChunkNBT(chunkX, chunkZ), logger);
+                if (chunk is null)
+                {
+                    LogCouldNotConvertChunk(logger, chunkX, chunkZ);
+                }
+                else
+                {
+                    chunks.Add(chunk);
+                }
+            }
+        }
+
+        var subChunks = chunks
+            .SelectMany(chunk =>
+            {
+                return Enumerable.Range(0, 16)
+                    .Select(subchunkY =>
+                    {
+                        Dictionary<int, int> palette = [];
+                        var blocks = new int[4096];
+                        for (var x = 0; x < 16; x++)
+                        {
+                            for (var y = 0; y < 16; y++)
+                            {
+                                for (var z = 0; z < 16; z++)
+                                {
+                                    var blockId = chunk.Blocks[(x * 256 + y + subchunkY * 16) * 16 + z];
+                                    blocks[(x * 16 + y) * 16 + z] = palette.ComputeIfAbsent(blockId, blockId1 => palette.Count);
+                                }
+                            }
+                        }
+
+                        if (palette.Count == 1 && palette.ContainsKey(BedrockBlocks.AirId))
+                        {
+                            return null;
+                        }
+                        else
+                        {
+                            return new PreviewModel.SubChunk(
+                                new PreviewModel.Position(chunk.ChunkX, subchunkY, chunk.ChunkZ),
+                                [.. palette.Keys
+                                    .Select(blockId =>
+                                        {
+                                            var name = BedrockBlocks.GetName(blockId) ?? throw new InvalidOperationException();
+                                            var data = 0;
+                                            while (blockId - data - 1 >= 0 && name == BedrockBlocks.GetName(blockId - data - 1))
+                                            {
+                                                data++;
+                                            }
+
+                                            return new PreviewModel.SubChunk.PaletteEntry(name, data);
+                                        })],
+                                blocks
+                            );
+                        }
+                    })
+                    .Where(subChunk => subChunk is not null);
+            })
+            .ToArray()!;
+
+        // block entities seem to not be used by the client when rendering the preview anyway?
+        // TODO: fix data being empty - client crashes
+        PreviewModel.BlockEntity[] blockEntities = [
+            // .. chunks
+            // .SelectMany(chunk => chunk.BlockEntities)
+            // .Where(blockEntity => blockEntity is not null)
+            // .Select(blockEntity =>
+            // {
+            //     int type;
+            //     switch (blockEntity!.GetString("id"))
+            //     {
+            //         case "Bed":
+            //             type = 27;
+            //             break;
+            //         case "PistonArm":
+            //             type = 18;
+            //             break;
+            //         default:
+            //             {
+            //                 Log.Warning($"No block entity type code mapping for {blockEntity.GetString("id")}");
+            //                 type = -1;
+            //             }
+
+            //             break;
+            //     }
+
+            //     return new PreviewModel.BlockEntity(
+            //         type,
+            //         new PreviewModel.Position(blockEntity.GetInt("x"), blockEntity.GetInt("y"), blockEntity.GetInt("z")),
+            //         JsonNbtConverter.Convert(blockEntity)
+            //     );
+
+            // })
+            // .Where(blockEntity => blockEntity.Type != -1)
+            ];
+
+        // TODO: entities
+        var previewModel = new PreviewModel(
+            1,
+            false,
+            subChunks!,
+            blockEntities,
+            []
+        );
+
+        return JsonSerializer.Serialize(previewModel, AppJsonContext.Default.PreviewModel);
+    }
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Could not convert chunk at ({PosX}, {PosZ})")]
+    private static partial void LogCouldNotConvertChunk(ILogger logger, int PosX, int PosZ);
+}

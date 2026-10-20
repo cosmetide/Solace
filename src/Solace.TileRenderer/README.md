@@ -1,3 +1,3 @@
 # Solace.TileRenderer
 
-Based on https://github.com/Project-Genoa/TileRenderer
+Based on [Project-Genoa/TileRenderer](https://github.com/Project-Genoa/TileRenderer)

@@ -1,8 +1,8 @@
 ﻿namespace Solace.ApiServer.Types.Workshop;
 
-public sealed record CraftingSlot(
+internal sealed record CraftingSlot(
     string? SessionId,
-    string? RecipeId,
+    Guid? RecipeId,
     OutputItem? Output,
     InputItem[]? Escrow,
     int Completed,

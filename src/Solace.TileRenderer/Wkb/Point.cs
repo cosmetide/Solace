@@ -1,11 +1,13 @@
 ﻿using System.Globalization;
+using System.Runtime.InteropServices;
 
 namespace Solace.TileRenderer.Wkb;
 
-public struct Point
+[StructLayout(LayoutKind.Auto)]
+internal readonly struct Point
 {
-    public double X;
-    public double Y;
+    public double X { get; }
+    public double Y { get; }
 
     public Point(double x, double y)
     {
@@ -19,32 +21,32 @@ public struct Point
     }
 
     public static Point Load(BinaryReader reader)
-        => new Point(reader.ReadDouble(), reader.ReadDouble());
+        => new(reader.ReadDouble(), reader.ReadDouble());
 
     public static Point operator +(Point left, Point right)
-        => new Point(left.X + right.X, left.Y + right.Y);
+        => new(left.X + right.X, left.Y + right.Y);
 
     public static Point operator -(Point left, Point right)
-        => new Point(left.X - right.X, left.Y - right.Y);
+        => new(left.X - right.X, left.Y - right.Y);
 
     public static Point operator *(Point left, Point right)
-        => new Point(left.X * right.X, left.Y * right.Y);
+        => new(left.X * right.X, left.Y * right.Y);
 
     public static Point operator /(Point left, Point right)
-        => new Point(left.X / right.X, left.Y / right.Y);
+        => new(left.X / right.X, left.Y / right.Y);
 
     public static Point operator +(Point left, double right)
-        => new Point(left.X + right, left.Y + right);
+        => new(left.X + right, left.Y + right);
 
     public static Point operator -(Point left, double right)
-        => new Point(left.X - right, left.Y - right);
+        => new(left.X - right, left.Y - right);
 
     public static Point operator *(Point left, double right)
-        => new Point(left.X * right, left.Y * right);
+        => new(left.X * right, left.Y * right);
 
     public static Point operator /(Point left, double right)
-        => new Point(left.X / right, left.Y / right);
+        => new(left.X / right, left.Y / right);
 
-    public readonly override string ToString()
+    public override readonly string ToString()
         => $"<{X.ToString("G", CultureInfo.InvariantCulture)}, {Y.ToString("G", CultureInfo.InvariantCulture)}>";
 }

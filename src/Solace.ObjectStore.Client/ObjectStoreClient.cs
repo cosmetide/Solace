@@ -1,343 +1,357 @@
-﻿using System;
-using System.Buffers;
-using System.IO;
-using System.IO.Pipelines;
-using System.Net.Sockets;
-using System.Text;
-using System.Threading;
-using System.Threading.Channels;
-using System.Threading.Tasks;
+﻿using System.Buffers;
+using Google.Protobuf;
+using Grpc.Core;
+using Grpc.Net.Client;
+using Microsoft.Extensions.Logging;
+using Solace.Common.Utils;
 
 namespace Solace.ObjectStore.Client;
 
 public sealed class ObjectStoreClient : IAsyncDisposable
 {
-    public sealed class ConnectException : ObjectStoreClientException
+    private readonly GrpcChannel _channel;
+    private readonly ObjectStoreService.ObjectStoreServiceClient _client;
+
+    public static async Task<ObjectStoreClient> ConnectAsync(string connectionString, ILogger logger)
     {
-        public ConnectException(string? message)
-            : base(message)
+        _ = logger;
+
+        var channel = GrpcChannel.ForAddress(connectionString);
+        var client = new ObjectStoreService.ObjectStoreServiceClient(channel);
+
+        return new ObjectStoreClient(channel, client, logger);
+    }
+
+    public ObjectStoreClient(GrpcChannel channel, ObjectStoreService.ObjectStoreServiceClient client, ILogger logger)
+    {
+        _ = logger;
+        _channel = channel;
+        _client = client;
+    }
+
+    public async Task<long> GetTotalSizeAsync(CancellationToken cancellationToken = default)
+    {
+        var response = await _client.GetTotalSizeAsync(new GetTotalSizeRequest(), cancellationToken: cancellationToken);
+
+        return response.TotalSize;
+    }
+
+    public async IAsyncEnumerable<Guid> ListIdsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        using var call = _client.ListObjects(new ListObjectsRequest(), cancellationToken: cancellationToken);
+        await foreach (var response in call.ResponseStream.ReadAllAsync(cancellationToken))
         {
+            yield return Guid.FromLowHigh(response.IdLow, response.IdHigh);
         }
+    }
 
-        public ConnectException(string? message, Exception? cause)
-            : base(message, cause)
+    [Obsolete("Make sure to only call from the DeleteAll endpoint", false)]
+    public async Task DeleteAllAsync(CancellationToken cancellationToken = default)
+        => await _client.DeleteAllAsync(new DeleteAllRequest(), cancellationToken: cancellationToken);
+
+    public async Task<Guid?> StoreAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default)
+    {
+        using var call = _client.StoreObject(cancellationToken: cancellationToken);
+
+        await call.RequestStream.WriteAsync(new StoreObjectRequest
         {
-        }
+            ChunkData = ByteString.CopyFrom(data.Span),
+        }, cancellationToken);
+
+        await call.RequestStream.CompleteAsync();
+
+        var response = await call;
+
+        return Guid.FromLowHigh(response.IdLow, response.IdHigh);
     }
 
-    private readonly string _host;
-    private readonly int _port;
-    private readonly Channel<Command> _commandQueue;
-    private readonly CancellationTokenSource _cts = new();
-    private readonly TaskCompletionSource _initialConnectTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly Task _processingTask;
-
-    public static async Task<ObjectStoreClient> ConnectAsync(string connectionString)
+    public async Task<Guid?> StoreAsync(Stream data, CancellationToken cancellationToken = default)
     {
-        string[] parts = connectionString.Split(':', 2);
-        string host = parts[0];
-        if (!int.TryParse(parts.Length > 1 ? parts[1] : "5396", out int port) || port is <= 0 or > 65535)
+        using var call = _client.StoreObject(cancellationToken: cancellationToken);
+
+        var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+        int bytesRead;
+        try
         {
-            throw new ArgumentException("Invalid port number in connection string.");
-        }
-
-        var client = new ObjectStoreClient(host, port);
-        await client._initialConnectTcs.Task;
-        return client;
-    }
-
-    private ObjectStoreClient(string host, int port)
-    {
-        _host = host;
-        _port = port;
-        _commandQueue = Channel.CreateUnbounded<Command>();
-        _processingTask = Task.Run(ProcessConnectionAsync);
-    }
-
-    public async Task<string?> StoreAsync(ReadOnlyMemory<byte> data)
-    {
-        var result = await EnqueueCommand(CommandType.Store, data);
-        return (string?)result;
-    }
-
-    public async Task<byte[]?> GetAsync(string id)
-    {
-        var result = await EnqueueCommand(CommandType.Get, id);
-        return (byte[]?)result;
-    }
-
-    public async Task<bool> DeleteAsync(string id)
-    {
-        var result = await EnqueueCommand(CommandType.Delete, id);
-        return (bool)result!;
-    }
-
-    private Task<object?> EnqueueCommand(CommandType type, object data)
-    {
-        var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        if (!_commandQueue.Writer.TryWrite(new Command(type, data, tcs)))
-        {
-            tcs.SetException(new ObjectDisposedException(nameof(ObjectStoreClient)));
-        }
-
-        return tcs.Task;
-    }
-
-    private async Task ProcessConnectionAsync()
-    {
-        while (!_cts.Token.IsCancellationRequested)
-        {
-            Socket? socket = null;
-            NetworkStream? stream = null;
-
-            try
+            while ((bytesRead = await data.ReadAsync(buffer, cancellationToken)) > 0)
             {
-                socket = new Socket(SocketType.Stream, ProtocolType.Tcp);
-                await socket.ConnectAsync(_host, _port, _cts.Token);
-
-                _initialConnectTcs.TrySetResult();
-
-                stream = new NetworkStream(socket, ownsSocket: true);
-                await RunMultiplexedLoopsAsync(stream);
-
-                break;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                if (_initialConnectTcs.TrySetException(new ConnectException($"Could not connect to {_host}:{_port}", ex)))
+                await call.RequestStream.WriteAsync(new StoreObjectRequest
                 {
-                    return;
-                }
+                    ChunkData = ByteString.CopyFrom(buffer, 0, bytesRead),
+                }, cancellationToken);
+            }
 
-                try
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(2), _cts.Token);
-                }
-                catch
-                {
-                    break;
-                }
-            }
-            finally
-            {
-                stream?.Dispose();
-                socket?.Dispose();
-            }
+            await call.RequestStream.CompleteAsync();
+
+            var response = await call;
+
+            return Guid.FromLowHigh(response.IdLow, response.IdHigh);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: false);
         }
     }
 
-    private async Task RunMultiplexedLoopsAsync(Stream stream)
+    public async Task<Guid?> UpdateAsync(Guid id, ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default)
     {
-        var reader = PipeReader.Create(stream);
-        var writer = PipeWriter.Create(stream);
-        var pendingResponses = Channel.CreateUnbounded<Command>();
+        var idLowHigh = id.ToLowHigh();
 
-        using var loopCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        using var call = _client.StoreObject(cancellationToken: cancellationToken);
 
-        var readTask = ReadLoopAsync(reader, pendingResponses.Reader, loopCts.Token);
-        var writeTask = WriteLoopAsync(writer, pendingResponses.Writer, loopCts.Token);
+        await call.RequestStream.WriteAsync(new StoreObjectRequest
+        {
+            IdLow = idLowHigh.Low,
+            IdHigh = idLowHigh.High,
+            ChunkData = ByteString.CopyFrom(data.Span),
+        }, cancellationToken);
 
-        Task completedTask = await Task.WhenAny(readTask, writeTask);
-        loopCts.Cancel();
+        await call.RequestStream.CompleteAsync();
+
+        var response = await call;
+
+        return Guid.FromLowHigh(response.IdLow, response.IdHigh);
+    }
+
+    public async Task<Guid?> UpdateAsync(Guid id, Stream data, CancellationToken cancellationToken = default)
+    {
+        var idLowHigh = id.ToLowHigh();
+
+        using var call = _client.StoreObject(cancellationToken: cancellationToken);
+
+        var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+        int bytesRead;
+        try
+        {
+            while ((bytesRead = await data.ReadAsync(buffer, cancellationToken)) > 0)
+            {
+                await call.RequestStream.WriteAsync(new StoreObjectRequest
+                {
+                    IdLow = idLowHigh.Low,
+                    IdHigh = idLowHigh.High,
+                    ChunkData = ByteString.CopyFrom(buffer, 0, bytesRead),
+                }, cancellationToken);
+            }
+
+            await call.RequestStream.CompleteAsync();
+
+            var response = await call;
+
+            return Guid.FromLowHigh(response.IdLow, response.IdHigh);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: false);
+        }
+    }
+
+    public async Task<Stream?> GetStreamAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var idLowHigh = id.ToLowHigh();
+        var call = _client.GetObject(new GetObjectRequest { IdLow = idLowHigh.Low, IdHigh = idLowHigh.High, }, cancellationToken: cancellationToken);
 
         try
         {
-            await Task.WhenAll(readTask, writeTask);
+            if (!await call.ResponseStream.MoveNext(cancellationToken))
+            {
+                // 0 bytes
+                call.Dispose();
+                return Stream.Null;
+            }
+
+            return new GetObjectStreamWrapper(call, call.ResponseStream.Current, cancellationToken);
+        }
+        catch (RpcException exception) when (exception.StatusCode == StatusCode.NotFound)
+        {
+            call.Dispose();
+            return null;
         }
         catch
         {
+            call.Dispose();
+            throw;
         }
-
-        pendingResponses.Writer.TryComplete();
-        var dropEx = new ConnectException("Connection dropped before response was received.");
-        await foreach (var cmd in pendingResponses.Reader.ReadAllAsync())
-        {
-            cmd.Tcs.TrySetException(dropEx);
-        }
-
-        await completedTask; // Rethrow inner exception to trigger reconnect
     }
 
-    private async Task WriteLoopAsync(PipeWriter writer, ChannelWriter<Command> pendingResponses, CancellationToken token)
+    public async Task<byte[]?> GetArrayAsync(Guid id, CancellationToken cancellationToken = default)
     {
         try
         {
-            await foreach (var command in _commandQueue.Reader.ReadAllAsync(token))
+            MemoryStream? memoryStream = null;
+            var idLowHigh = id.ToLowHigh();
+            using var call = _client.GetObject(new GetObjectRequest { IdLow = idLowHigh.Low, IdHigh = idLowHigh.High, }, cancellationToken: cancellationToken);
+
+            await foreach (var response in call.ResponseStream.ReadAllAsync(cancellationToken))
             {
-                pendingResponses.TryWrite(command);
-                await WriteCommandAsync(writer, command, token);
+                memoryStream ??= new MemoryStream((int)response.TotalLength);
+                response.ChunkData.WriteTo(memoryStream);
             }
+
+            if (memoryStream is null)
+            {
+                return [];
+            }
+
+            return memoryStream.ToArray();
         }
-        finally
+        catch (RpcException exception) when (exception.StatusCode == StatusCode.NotFound)
         {
-            await writer.CompleteAsync();
+            return null;
         }
     }
 
-    private static async Task ReadLoopAsync(PipeReader reader, ChannelReader<Command> pendingResponses, CancellationToken token)
+    public async Task<Memory<byte>?> GetMemoryAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        Range[] partsArray = ArrayPool<Range>.Shared.Rent(2);
         try
         {
-            while (true)
+            MemoryStream? memoryStream = null;
+            var idLowHigh = id.ToLowHigh();
+            using var call = _client.GetObject(new GetObjectRequest { IdLow = idLowHigh.Low, IdHigh = idLowHigh.High, }, cancellationToken: cancellationToken);
+
+            await foreach (var response in call.ResponseStream.ReadAllAsync(cancellationToken))
             {
-                ReadResult result = await reader.ReadAsync(token);
-                ReadOnlySequence<byte> buffer = result.Buffer;
-
-                if (TryReadMessage(ref buffer, out ReadOnlySequence<byte> line))
-                {
-                    if (!pendingResponses.TryRead(out var command))
-                    {
-                        throw new InvalidOperationException("Received unsolicited response from server.");
-                    }
-
-                    var message = Encoding.ASCII.GetString(line).AsSpan().Trim('\r');
-                    var parts = partsArray.AsSpan(0, 2);
-                    var partsLength = message.Split(parts, ' ');
-                    var partsLocal = parts[..partsLength];
-
-                    if (message[partsLocal[0]] is "ERR")
-                    {
-                        command.Tcs.TrySetResult(command.Type is CommandType.Delete ? false : null);
-                        reader.AdvanceTo(buffer.Start);
-                        continue;
-                    }
-
-                    if (message[partsLocal[0]] is "OK")
-                    {
-                        if (command.Type is CommandType.Delete)
-                        {
-                            command.Tcs.TrySetResult(true);
-                            reader.AdvanceTo(buffer.Start);
-                            continue;
-                        }
-
-                        if (command.Type is CommandType.Store)
-                        {
-                            command.Tcs.TrySetResult(partsLocal.Length > 1 ? message[partsLocal[1]].ToString() : null);
-                            reader.AdvanceTo(buffer.Start);
-                            continue;
-                        }
-
-                        if (command.Type is CommandType.Get && partsLocal.Length is 2 && int.TryParse(message[partsLocal[1]], out int length))
-                        {
-                            reader.AdvanceTo(buffer.Start);
-                            await ReadBinaryPayloadAsync(reader, length, command, token);
-                            continue;
-                        }
-                    }
-
-                    throw new InvalidDataException("Invalid server response format.");
-                }
-
-                reader.AdvanceTo(buffer.Start, buffer.End);
-
-                if (result.IsCompleted)
-                {
-                    throw new EndOfStreamException("Server closed the connection.");
-                }
+                memoryStream ??= new MemoryStream((int)response.TotalLength);
+                response.ChunkData.WriteTo(memoryStream);
             }
+
+            if (memoryStream is null)
+            {
+                return Memory<byte>.Empty;
+            }
+
+            _ = memoryStream.TryGetBuffer(out var buffer);
+
+            return buffer.AsMemory();
         }
-        finally
+        catch (RpcException exception) when (exception.StatusCode == StatusCode.NotFound)
         {
-            ArrayPool<Range>.Shared.Return(partsArray);
-            await reader.CompleteAsync();
+            return null;
         }
     }
 
-    private static async Task WriteCommandAsync(PipeWriter writer, Command command, CancellationToken token)
+    public async Task<bool> ExistsAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        switch (command.Type)
-        {
-            case CommandType.Store:
-                var memory = (ReadOnlyMemory<byte>)command.Data;
-                var header = Encoding.ASCII.GetBytes($"STORE {memory.Length}\n");
-                writer.Write(header);
-                writer.Write(memory.Span);
-                await writer.FlushAsync(token);
-                break;
-            case CommandType.Get:
-                await writer.WriteAsync(Encoding.ASCII.GetBytes($"GET {(string)command.Data}\n"), token);
-                break;
-            case CommandType.Delete:
-                await writer.WriteAsync(Encoding.ASCII.GetBytes($"DEL {(string)command.Data}\n"), token);
-                break;
-        }
+        var idLowHigh = id.ToLowHigh();
+        var response = await _client.ObjectExistsAsync(new ObjectExistsRequest { IdLow = idLowHigh.Low, IdHigh = idLowHigh.High, }, cancellationToken: cancellationToken);
+
+        return response.Exists;
     }
 
-    private static async Task ReadBinaryPayloadAsync(PipeReader reader, int length, Command command, CancellationToken token)
+    public async Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        if (length is 0)
-        {
-            command.Tcs.TrySetResult(Array.Empty<byte>());
-            return;
-        }
+        var idLowHigh = id.ToLowHigh();
+        var response = await _client.DeleteObjectAsync(new DeleteObjectRequest { IdLow = idLowHigh.Low, IdHigh = idLowHigh.High, }, cancellationToken: cancellationToken);
 
-        while (true)
-        {
-            ReadResult result = await reader.ReadAsync(token);
-            ReadOnlySequence<byte> buffer = result.Buffer;
-
-            if (buffer.Length >= length)
-            {
-                byte[] data = buffer.Slice(0, length).ToArray();
-                command.Tcs.TrySetResult(data);
-
-                reader.AdvanceTo(buffer.GetPosition(length));
-                return;
-            }
-
-            reader.AdvanceTo(buffer.Start, buffer.End);
-
-            if (result.IsCompleted)
-            {
-                throw new EndOfStreamException("Incomplete binary payload received.");
-            }
-        }
-    }
-
-    private static bool TryReadMessage(ref ReadOnlySequence<byte> buffer, out ReadOnlySequence<byte> line)
-    {
-        SequencePosition? position = buffer.PositionOf((byte)'\n');
-        if (position is null)
-        {
-            line = default;
-            return false;
-        }
-
-        line = buffer.Slice(0, position.Value);
-        buffer = buffer.Slice(buffer.GetPosition(1, position.Value));
-        return true;
+        return response.Success;
     }
 
     public async ValueTask DisposeAsync()
     {
-        _cts.Cancel();
-        _commandQueue.Writer.TryComplete();
-
-        try
-        {
-            await _processingTask.WaitAsync(TimeSpan.FromSeconds(3));
-        }
-        catch
-        {
-        }
-
-        var ex = new ObjectDisposedException(nameof(ObjectStoreClient));
-        
-        while (_commandQueue.Reader.TryRead(out var cmd))
-        {
-            cmd.Tcs.TrySetException(ex);
-        }
+        await _channel.ShutdownAsync();
+        _channel.Dispose();
     }
 
-    private enum CommandType
+    private sealed class GetObjectStreamWrapper : Stream
     {
-        Store,
-        Get,
-        Delete,
-    }
+        private readonly AsyncServerStreamingCall<GetObjectResponse> _call;
+        private readonly CancellationToken _externalCancellationToken;
+        private readonly long _length;
+        private ReadOnlyMemory<byte> _currentChunk;
+        private long _position;
+        private bool _isDone;
 
-    private readonly record struct Command(CommandType Type, object Data, TaskCompletionSource<object?> Tcs);
+        public GetObjectStreamWrapper(AsyncServerStreamingCall<GetObjectResponse> call, GetObjectResponse firstResponse, CancellationToken cancellationToken)
+        {
+            _call = call;
+            _currentChunk = firstResponse.ChunkData.Memory;
+            _externalCancellationToken = cancellationToken;
+
+            _length = firstResponse.TotalLength;
+        }
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => _length;
+
+        public override long Position
+        {
+            get => _position;
+            set => throw new NotSupportedException();
+        }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (buffer.IsEmpty)
+            {
+                return 0;
+            }
+
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_externalCancellationToken, cancellationToken);
+
+            while (_currentChunk.IsEmpty)
+            {
+                if (_isDone)
+                {
+                    return 0;
+                }
+
+                if (await _call.ResponseStream.MoveNext(linkedCts.Token))
+                {
+                    _currentChunk = _call.ResponseStream.Current.ChunkData.Memory;
+                }
+                else
+                {
+                    _isDone = true;
+                    return 0; // end of stream
+                }
+            }
+
+            var bytesToRead = int.Min(buffer.Length, _currentChunk.Length);
+            _currentChunk.Span[..bytesToRead].CopyTo(buffer.Span);
+            _currentChunk = _currentChunk[bytesToRead..];
+
+            _position += bytesToRead;
+
+            return bytesToRead;
+        }
+
+        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => await ReadAsync(buffer.AsMemory(offset, count), cancellationToken);
+
+        public override int Read(byte[] buffer, int offset, int count)
+            => ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+            => throw new NotSupportedException();
+
+        public override void SetLength(long value)
+            => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _call.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            _call.Dispose();
+            await base.DisposeAsync();
+        }
+    }
 }

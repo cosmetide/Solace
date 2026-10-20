@@ -1,8 +1,8 @@
-﻿using Serilog;
+﻿using Microsoft.Extensions.Logging;
 
 namespace Solace.Common.Utils;
 
-public static class TaskExtensions
+public static partial class TaskExtensions
 {
     extension(Task task)
     {
@@ -32,18 +32,22 @@ public static class TaskExtensions
                     // No need to resume on the original SynchronizationContext, so use ConfigureAwait(false)
                     await task.ConfigureAwait(false);
                 }
-                catch (Exception ex)
+                catch (Exception exception)
                 {
                     if (onException is null)
                     {
-                        Log.Error($"Unhandeled async exception: {ex}");
+                        var logger = GlobalLoggerFactory.CreateLogger(nameof(TaskExtensions));
+                        LogUnhandledAsyncException(logger, exception);
                     }
                     else
                     {
-                        onException(ex);
+                        onException(exception);
                     }
                 }
             }
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Unhandled async exception")]
+    private static partial void LogUnhandledAsyncException(ILogger logger, Exception exception);
 }

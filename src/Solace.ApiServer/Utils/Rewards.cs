@@ -1,24 +1,22 @@
 ﻿using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
-using Serilog;
-using Solace.Common.Utils;
-using Solace.DB;
-using Solace.DB.Models.Common;
-using Solace.DB.Models.Player;
-using Solace.DB.Utils;
-using Solace.StaticData;
+using Microsoft.Extensions.Logging.Abstractions;
+using Solace.BuildplateImporter;
+using Solace.Db.Earth;
+using Solace.Db.Earth.Models.Player;
+using Solace.ObjectStore.Client;
 
 namespace Solace.ApiServer.Utils;
 
-public sealed class Rewards
+internal sealed class Rewards
 {
     private int _rubies;
     private int _experiencePoints;
 
     private int? _level;
-    private readonly Dictionary<string, int> _items = [];
-    private readonly HashSet<string> _buildplates = [];
-    private readonly HashSet<string> _challenges = [];
+    private readonly Dictionary<Guid, int> _items = [];
+    private readonly HashSet<Guid> _buildplates = [];
+    private readonly HashSet<Guid> _challenges = [];
 
     public Rewards()
     {
@@ -27,23 +25,31 @@ public sealed class Rewards
 
     public Rewards SetLevel(int level)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(level, 1);
+
         _level = level;
         return this;
     }
 
-    public Rewards AddItem(string id, int count)
+    public Rewards AddItem(Guid id, int count)
     {
-        _items[id] = _items.GetValueOrDefault(id, 0) + count;
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
+
+        if (count > 0)
+        {
+            _items[id] = _items.GetValueOrDefault(id, 0) + count;
+        }
+
         return this;
     }
 
-    public Rewards AddBuildplate(string id)
+    public Rewards AddBuildplate(Guid id)
     {
         _buildplates.Add(id);
         return this;
     }
 
-    public Rewards AddChallenge(string id)
+    public Rewards AddChallenge(Guid id)
     {
         _challenges.Add(id);
         return this;
@@ -51,116 +57,93 @@ public sealed class Rewards
 
     public Rewards AddRubies(int rubies)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(rubies);
+
         _rubies += rubies;
         return this;
     }
 
     public Rewards AddExperiencePoints(int experiencePoints)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(experiencePoints);
+
         _experiencePoints += experiencePoints;
         return this;
     }
 
-    public async Task ToRedeemQueryAsync(EarthDbContext.Results results, Guid accountId, long currentTime, StaticData.StaticData staticData)
+    public async Task ToRedeemQueryAsync(EarthDbContext earthDb, ResultsEF.Builder results, ObjectStoreClient objectStore, Guid profileId, DateTimeOffset currentTime, StaticData.StaticDataProvider staticData, CancellationToken cancellationToken = default)
     {
-        ProfileEF? profile = null;
+        var checkLevelUp = false;
         if (_rubies > 0 || _experiencePoints > 0)
         {
-            profile = await results.EarthDb.Profiles
-                .AsTracking()
-                .FirstOrNewAsync(profile => profile.Id == accountId);
-        }
-
-        InventoryEF? inventory = null;
-        JournalEF? journal = null;
-        if (_items.Count > 0)
-        {
-            inventory = await results.EarthDb.Inventories
-                .AsTracking()
-                .FirstOrNewAsync(inventory => inventory.Id == accountId);
-
-            journal = await results.EarthDb.Journals
-                .AsTracking()
-                .FirstOrNewAsync(journal => journal.Id == accountId);
-        }
-
-        if (_buildplates.Count > 0)
-        {
-            // TODO
-        }
-
-        if (_challenges.Count > 0)
-        {
-            // TODO
-        }
-
-        bool checkLevelUp = false;
-        if (_rubies > 0 || _experiencePoints > 0)
-        {
-            Debug.Assert(profile is not null);
-
-            if (_rubies > 0)
-            {
-                profile.Rubies.Earned += _rubies;
-            }
-
-            if (_experiencePoints > 0)
-            {
-                profile.Experience += _experiencePoints;
-            }
+            await earthDb.Profiles
+                .Where(profile => profile.Id == profileId)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(profile => profile.Rubies.Earned, profile => profile.Rubies.Earned + _rubies)
+                    .SetProperty(profile => profile.Experience, profile => profile.Experience + _experiencePoints), cancellationToken);
 
             if (_experiencePoints > 0)
             {
                 checkLevelUp = true;
             }
 
-            await results.EarthDb.SaveChangesAsync();
-
-            results.Profile = profile.Version;
+            results.Profile();
         }
 
         if (_items.Count > 0)
         {
-            Debug.Assert(inventory is not null);
-            Debug.Assert(journal is not null);
-
-            foreach (var entry in _items)
+            foreach (var (itemId, quantity) in _items)
             {
-                string id = entry.Key;
-                int quantity = entry.Value;
                 if (quantity > 0)
                 {
-                    Catalog.ItemsCatalogR.Item? item = staticData.Catalog.ItemsCatalog.GetItem(id);
+                    var item = staticData.Catalog.ItemsCatalog.GetItem(itemId);
                     Debug.Assert(item is not null);
 
                     if (item.Stackable)
                     {
-                        inventory.AddItems(id, quantity);
+                        await InventoryUtils.AddStackableItemsAsync(earthDb, results, profileId, itemId, quantity, cancellationToken);
                     }
                     else
                     {
-                        inventory.AddItems(id, [.. Enumerable.Range(0, quantity).Select(index => new NonStackableItemInstance(Guid.NewGuid().ToString(), 0))]);
+                        await InventoryUtils.AddInstanceItemsAsync(earthDb, results, profileId, itemId, quantity, cancellationToken);
                     }
 
-                    if (journal.AddCollectedItem(id, currentTime, quantity) == 0)
+                    if (await JournalUtils.AddCollectedItemAsync(earthDb, results, profileId, itemId, currentTime, quantity, cancellationToken) is 0)
                     {
                         if (item.JournalEntry is not null)
                         {
-                            await TokenUtils.AddTokenAsync(results, accountId, new TokensEF.JournalItemUnlockedToken(id));
+                            await TokenUtils.AddTokenAsync(earthDb, results, new JournalItemUnlockedTokenEF(profileId, itemId), cancellationToken);
                         }
                     }
                 }
             }
 
-            await results.EarthDb.SaveChangesAsync();
+            await earthDb.SaveChangesAsync(cancellationToken);
 
-            results.Inventory = inventory.Version;
-            results.Journal = journal.Version;
+            results.Inventory();
+            results.Journal();
         }
 
         if (_buildplates.Count > 0)
         {
-            // TODO
+            await using var importer = new Importer(earthDb, null, objectStore, NullLogger.Instance)
+            {
+                OwnsEarthDb = false,
+                OwnsEventBusClient = false,
+                OwnsObjectStoreClient = false,
+            };
+
+            foreach (var buildplateId in _buildplates)
+            {
+                if (await earthDb.PlayerBuildplates.AnyAsync(buildplate => buildplate.ProfileId == profileId && buildplate.TemplateId == buildplateId, cancellationToken))
+                {
+                    continue;
+                }
+
+                await importer.AddBuidplateToPlayer(buildplateId, profileId, cancellationToken);
+
+                results.Buildplates();
+            }
         }
 
         if (_challenges.Count > 0)
@@ -170,23 +153,23 @@ public sealed class Rewards
 
         if (checkLevelUp)
         {
-            await LevelUtils.CheckAndHandlePlayerLevelUpAsync(results, accountId, currentTime, staticData);
+            await LevelUtils.CheckAndHandlePlayerLevelUpAsync(earthDb, results, profileId, currentTime, staticData, cancellationToken);
         }
     }
 
     public Types.Common.Rewards ToApiResponse()
-        => new Types.Common.Rewards(
+        => new(
             _rubies,
             _experiencePoints,
             _level,
-            [.. _items.Select(item => new Types.Common.Rewards.Item(item.Key, item.Value))],
+            [.. _items.Select(item => new Types.Common.RewardsItem(item.Key, item.Value))],
             [.. _buildplates],
-            [.. _challenges.Select(challenge => new Types.Common.Rewards.Challenge(challenge))],
+            [.. _challenges.Select(challenge => new Types.Common.RewardsChallenge(challenge))],
             [],
             []
         );
 
-    public static Rewards FromDBRewardsModel(DB.Models.Common.Rewards rewardsModel)
+    public static Rewards FromDBRewardsModel(Db.Earth.Models.Common.Rewards rewardsModel)
     {
         var rewards = new Rewards();
         rewards.AddRubies(rewardsModel.Rubies);
@@ -198,7 +181,7 @@ public sealed class Rewards
 
         foreach (var (id, count) in rewardsModel.Items)
         {
-            rewards.AddItem(id, count ?? 1);
+            rewards.AddItem(id, count);
         }
 
         foreach (var id in rewardsModel.Buildplates)
@@ -214,12 +197,12 @@ public sealed class Rewards
         return rewards;
     }
 
-    public DB.Models.Common.Rewards ToDBRewardsModel()
-        => new DB.Models.Common.Rewards(
+    public Db.Earth.Models.Common.Rewards ToDBRewardsModel()
+        => new(
             _rubies,
             _experiencePoints,
             _level,
-            _items.ToDictionary(item => item.Key, item => (int?)item.Value),
+            _items.ToDictionary(item => item.Key, item => item.Value),
             [.. _buildplates],
             [.. _challenges]
         );

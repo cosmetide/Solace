@@ -34,10 +34,10 @@ Replacement server for Minecraft Earth™, based on [Vienna](https://github.com/
 | Crafting      | :white_check_mark: |                                                                                          |
 | Smelting      | :white_check_mark: |                                                                                          |
 | Boosts        | :white_check_mark: |                                                                                          |
-| Boost Minis   | :construction:     | List loads, activation does not work                                                     |
+| Boost Minis   | :white_check_mark: |                                                                                          |
 | Tappables     | :white_check_mark: | Map is not used for generation, e.g. tappables can spawn on water                        |
 | Buildplates   | :white_check_mark: |                                                                                          |
-| Store         | :white_check_mark: | Tab titles do not load                                                                   |
+| Store         | :white_check_mark: | 2 buildplates are missing                                                                |
 | Challenges    | :construction:     |                                                                                          |
 | Seasons       | :construction:     |                                                                                          |
 | Adventures    | :construction:     |                                                                                          |
@@ -52,21 +52,30 @@ Replacement server for Minecraft Earth™, based on [Vienna](https://github.com/
 
 ## Installation
 
-For installation instructions, refer to [Installation.md](Installation.md)
+Refer to the [Installation Guide](docs/Installation.md) to get started.
+
+### Termux (Android)
+
+Solace can run without Docker on Android through Termux. From the Termux app, run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Earth-Restored/Solace/refs/heads/aspire/install.sh | bash
+```
+
+The installer sets up PostgreSQL and proot-distro Ubuntu with .NET 11, the Aspire CLI
+and Java 21, then installs the `earth` launcher. Run `earth` to open the TUI. See the
+[Installation Guide](docs/Installation.md#termux-android) for the first-start steps,
+LAN configuration and troubleshooting.
+
+> [!IMPORTANT]
+> **Upgrading from pre-1.0.0?**
+> Follow the [Migration Guide](docs/MigratePre1.0.0.md) to manually migrate your data.
+
+## Building
+
+Refer to the [Build Guide](docs/Build.md) for instructions on building from source.
 
 ## Common Errors & Troubleshooting
-
-### I cannot see the "Start Server" button when logged in
-
-**Cause:** Only the very first account created on the launcher is granted full administrative permissions by default. Subsequent accounts lack the necessary privileges to manage the server.
-
-**Solutions:**
-
-* **Option A (Grant Permissions):** Log into the original (first) account and use the Manage Users/Roles page to grant server permissions to your second account.
-* **Option B (Reset Database):** If you have lost access to the first account and need to start fresh, you can reset the user database.
-  * Navigate to: `launcher/Data/`
-  * **Delete** the `app.db` file.
-  * *Note: This will remove all existing accounts and allow you to register a new primary admin account.*
 
 ### When I open the app, I get "Cannot connect to the network! ..."
 

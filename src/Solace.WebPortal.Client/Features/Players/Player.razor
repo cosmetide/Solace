@@ -1,0 +1,122 @@
+@page "/Players/{PlayerId:guid}"
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Security.Claims
+@using Solace.WebPortal.Client.Features.Common
+@using Solace.WebPortal.Common
+@attribute [Authorize(Policy = Permissions.ViewPlayers)]
+@implements IDisposable
+@rendermode InteractiveWebAssembly
+@inject HttpClient Http
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject NavigationManager NavManager
+
+<PageTitle>Player Profile - Solace</PageTitle>
+
+<div class="container mt-3 mb-5" style="max-width: 900px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <a class="btn btn-secondary btn-sm" href="/Players">
+            <i class="bi bi-arrow-left"></i> Back to Players
+        </a>
+
+        @if (_user.HasPermission(Permissions.ManagePlayers))
+        {
+            <button class="btn btn-danger btn-sm" @onclick="OpenDeleteModal">
+                <i class="bi bi-trash me-1"></i> Delete Player
+            </button>
+        }
+    </div>
+
+    <ProfileDisplay @ref="@_profileDisplay" ProfileId="@PlayerId" DisplayOwner="true" />
+
+    @if (IsDeleteModalVisible)
+    {
+        <DeleteConfirmModal Visible="true" IsBusy="IsDeletingPlayer" LoadingButtonText="Deleting..." Message="Are you sure you want to delete player" ItemName="@(_profileDisplay?.PlayerAccount?.Username ?? "[unknown]")" ErrorMessage="@DeleteErrorMessage" ModalSizeClass="modal-sm" OnCancel="CloseDeleteModal" OnConfirm="DeletePlayerAsync" />
+    }
+</div>
+
+@code {
+    [Parameter]
+    public Guid PlayerId { get; set; }
+
+    private ProfileDisplay? _profileDisplay;
+
+    private ClaimsPrincipal? _user;
+
+    protected override async Task OnInitializedAsync()
+    {
+        AuthenticationStateProvider.AuthenticationStateChanged += OnAuthenticationStateChanged;
+        await UpdateAuthenticationStateAsync(AuthenticationStateProvider.GetAuthenticationStateAsync());
+    }
+
+    private async void OnAuthenticationStateChanged(Task<AuthenticationState> task)
+    {
+        await UpdateAuthenticationStateAsync(task);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task UpdateAuthenticationStateAsync(Task<AuthenticationState> task)
+    {
+        var authState = await task;
+        _user = authState.User;
+    }
+
+    public void Dispose()
+    {
+        AuthenticationStateProvider.AuthenticationStateChanged -= OnAuthenticationStateChanged;
+    }
+
+    private bool IsDeleteModalVisible { get; set; } = false;
+    private bool IsDeletingPlayer { get; set; } = false;
+    private string? DeleteErrorMessage { get; set; }
+
+    private void OpenDeleteModal()
+    {
+        DeleteErrorMessage = null;
+        IsDeleteModalVisible = true;
+    }
+
+    private void CloseDeleteModal()
+    {
+        IsDeleteModalVisible = false;
+        DeleteErrorMessage = null;
+    }
+
+    private async Task DeletePlayerAsync()
+    {
+        if (_profileDisplay?.PlayerAccount is null)
+        {
+            return;
+        }
+
+        IsDeletingPlayer = true;
+        DeleteErrorMessage = null;
+
+        try
+        {
+            var uri = $"api/players/{PlayerId}";
+            using var response = await Http.DeleteAsync(uri);
+
+            if (response.IsSuccessStatusCode)
+            {
+                IsDeleteModalVisible = false;
+                NavManager.NavigateTo("/Players");
+            }
+            else
+            {
+                var error = await response.Content.ReadAsStringAsync();
+                DeleteErrorMessage = string.IsNullOrEmpty(error) ? "Failed to delete player account." : error;
+            }
+        }
+        catch
+        {
+            DeleteErrorMessage = "An error occurred while deleting the player.";
+        }
+        finally
+        {
+            IsDeletingPlayer = false;
+        }
+    }
+}

@@ -1,95 +1,111 @@
-﻿using CommandLine;
-using Serilog;
+﻿using BitcoderCZ.IO;
+using Solace.Common;
+using Solace.ObjectStore.Server.Services;
 using System.Diagnostics;
-using System.Globalization;
-
+#if USE_SHARED_LIBS
+using System.Runtime.Loader;
+#endif
 namespace Solace.ObjectStore.Server;
 
 internal static class Program
 {
-    private sealed class Options
+    private static Task<int> Main(string[] args)
     {
-        [Option("dataDir", Default = "data", Required = false, HelpText = "Directory where data is stored")]
-        public string DataDir { get; set; } = null!;
+#if USE_SHARED_LIBS
+        AssemblyLoadContext.Default.Resolving += (context, assemblyName) =>
+        {
+            string sharedDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "shared_libs"));
+            string assemblyPath = Path.Combine(sharedDir, $"{assemblyName.Name}.dll");
 
-        [Option("port", Default = 5396, Required = false, HelpText = "Port to listen on")]
-        public int Port { get; set; }
+            if (File.Exists(assemblyPath))
+            {
+                return context.LoadFromAssemblyPath(assemblyPath);
+            }
 
-        [Option("logger-url", Default = null, Required = false, HelpText = "Url to send logs to")]
-        public string? LoggerUrl { get; set; }
+            return null;
+        };
+#endif
+
+        return App.RunAsync(args);
     }
+}
 
-    private static async Task<int> Main(string[] args)
+#pragma warning disable MA0048 // File name must match type name
+internal static partial class App
+#pragma warning restore MA0048 // File name must match type name
+{
+    public static async Task<int> RunAsync(string[] args)
     {
         if (!Debugger.IsAttached)
         {
-            AppDomain.CurrentDomain.UnhandledException += (object sender, UnhandledExceptionEventArgs e) =>
+            AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
             {
-                Log.Fatal($"Unhandled exception: {e.ExceptionObject}");
-                Log.CloseAndFlush();
-                Environment.Exit(1);
+                Console.Error.WriteLine($"Unhandled exception: {e.ExceptionObject}");
+
+                try
+                {
+                    var logger = GlobalLoggerFactory.CreateLogger(nameof(Program));
+                    LogUnhandledException(logger, e.ExceptionObject as Exception);
+                }
+                catch
+                {
+                    Console.Error.WriteLine($"Unhandled exception before logger initialization");
+                }
+
+                Console.Out.Flush();
+                Console.Error.Flush();
+
+                Environment.Exit(2);
             };
         }
 
-        ParserResult<Options> res = Parser.Default.ParseArguments<Options>(args);
+        var builder = WebApplication.CreateSlimBuilder(args);
 
-        Options options;
-        if (res is Parsed<Options> parsed)
-        {
-            options = parsed.Value;
-        }
-        else if (res is NotParsed<Options> notParsed)
-        {
-            if (res.Errors.Any(error => error is HelpRequestedError))
-            {
-                return 0;
-            }
-            else if (res.Errors.Any(error => error is VersionRequestedError))
-            {
-                return 0;
-            }
-            else
-            {
-                return 1;
-            }
-        }
-        else
-        {
-            return 1;
-        }
+        builder.AddServiceDefaults();
+        builder.WebHost.UseKestrelHttpsConfiguration();
 
-        var loggerConfig = new LoggerConfiguration()
-                 .WriteTo.Console(formatProvider: CultureInfo.InvariantCulture)
-                 .WriteTo.File("logs/object_store_server/log.txt", rollingInterval: RollingInterval.Day, rollOnFileSizeLimit: true, fileSizeLimitBytes: 8338607, outputTemplate: "{Timestamp:HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}", formatProvider: CultureInfo.InvariantCulture)
-                 .Enrich.WithProperty("ComponentName", "ObjectStore");
+        builder.Services.AddGrpc();
 
-        if (!string.IsNullOrWhiteSpace(options.LoggerUrl))
-        {
-            loggerConfig.WriteTo.Http(options.LoggerUrl, 10 * 1024 * 1024);
-        }
+        var dataDirectory = Path.GetFullPath(builder.Configuration.GetValue<string>("DataDirectory", "data/object_store"));
 
-        loggerConfig.MinimumLevel.Debug();
-        var log = loggerConfig.CreateLogger();
+        builder.Services.AddSingleton(new DataStore(new AbsoluteDirectory(dataDirectory)));
 
-        Log.Logger = log;
+        await using var app = builder.Build();
 
-        NetworkServer server;
+        var loggerFactory = app.Services.GetRequiredService<ILoggerFactory>();
+        GlobalLoggerFactory.Initialize(loggerFactory);
+
+        var logger = loggerFactory.CreateLogger(nameof(Program));
+        LogDataStoragePath(logger, dataDirectory);
         try
         {
-            server = new NetworkServer(new Server(new DataStore(new DirectoryInfo(options.DataDir))), options.Port);
+            var testPath = Path.Combine(dataDirectory, $".write_test_{Guid.NewGuid():N}");
+            File.WriteAllText(testPath, "test");
+            File.Delete(testPath);
         }
-        catch (Exception ex) when (
-            ex is IOException
-            || ex is DataStore.DataStoreException
-        )
+        catch (Exception exception)
         {
-            Log.Fatal(ex.ToString());
-            Log.CloseAndFlush();
-            return 1;
+            LogDataDirectoryNotWritable(logger, exception, dataDirectory);
+            return 2;
         }
 
-        await server.RunAsync();
+        app.MapGrpcService<ObjectStoreServiceImpl>();
+
+        app.MapDefaultEndpoints();
+
+        app.MapGet("/", () => "Communication with gRPC endpoints must be made through a gRPC client.");
+
+        await app.RunAsync();
 
         return 0;
     }
+
+    [LoggerMessage(Level = LogLevel.Critical, Message = "Unhandled exception")]
+    private static partial void LogUnhandledException(ILogger logger, Exception? exception);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Using {Path} for data storage")]
+    private static partial void LogDataStoragePath(ILogger logger, string Path);
+
+    [LoggerMessage(Level = LogLevel.Critical, Message = "Object store data directory '{Path}' is not writable by the process. Check bind-mount ownership and permissions")]
+    private static partial void LogDataDirectoryNotWritable(ILogger logger, Exception exception, string Path);
 }

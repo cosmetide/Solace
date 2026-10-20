@@ -1,201 +1,213 @@
-﻿using Serilog;
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Globalization;
-using System.Reflection;
-using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging;
 
 namespace Solace.Common.Utils;
 
 public static partial class ProcessExtensions
 {
-    extension (Process process){
-    public async Task StopGracefullyOrKillAsync(int timeout, CancellationToken cancellationToken)
+    extension(Process process)
     {
-        if (!await process.TryStopGracefullyAsync(timeout, cancellationToken))
+        public async Task StopGracefullyOrKillAsync(TimeSpan timeout, ILogger logger, CancellationToken cancellationToken)
         {
-            process.Kill(true);
-        }
-    }
-
-    public async Task StopGracefullyOrKillAndWaitAsync(int timeout, CancellationToken cancellationToken)
-    {
-        await process.StopGracefullyOrKillAsync(timeout, cancellationToken);
-
-        await process.WaitForExitAsync(timeout, cancellationToken);
-    }
-
-    public async Task<bool> TryStopGracefullyAsync(int timeout, CancellationToken cancellationToken)
-    {
-        try
-        {
-            if (process.HasExited)
+            if (!await process.TryStopGracefullyAsync(timeout, logger, cancellationToken))
             {
-                return true;
-            }
-
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                if (await process.WinTrySendCtrlCAsync(timeout, cancellationToken))
-                {
-                    return true;
-                }
-
-                if (await process.TryCloseMainWindowAsync(timeout, cancellationToken))
-                {
-                    return true;
-                }
-            }
-            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux) || RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-            {
-                if (await process.UnixTrySendShutdownSignalAsync(timeout, cancellationToken))
-                {
-                    return true;
-                }
+                process.Kill(true);
             }
         }
-        catch
+
+        public async Task StopGracefullyOrKillAndWaitAsync(TimeSpan timeout, ILogger logger, CancellationToken cancellationToken)
         {
-        }
-
-        return process.HasExited;
-    }
-
-    public Task WaitForExitAsync(int timeout, CancellationToken cancellationToken)
-        => Task.WhenAny(process.WaitForExitAsync(cancellationToken), Task.Delay(timeout, cancellationToken));
-
-    #region Async
-    private async Task<bool> WinTrySendCtrlCAsync(int timeout, CancellationToken cancellationToken)
-    {
-        Debug.Assert(RuntimeInformation.IsOSPlatform(OSPlatform.Windows));
-
-        string exePath = Path.GetFullPath("Solace.KillHelper.exe");
-
-        var startInfo = new ProcessStartInfo(exePath, [process.Id.ToString(CultureInfo.InvariantCulture)])
-        {
-            UseShellExecute = true,
-            CreateNoWindow = false
-        };
-
-        using (var killProcess = Process.Start(startInfo))
-        {
-            if (killProcess is null)
-            {
-                Log.Warning("Failed to start killer process");
-                return false;
-            }
-
-            await killProcess.WaitForExitAsync(cancellationToken);
-            var exitCode = killProcess.ExitCode;
-
-            if (exitCode is 0)
-            {
-                await process.WaitForExitAsync(timeout, cancellationToken);
-                return process.HasExited;
-            }
-
-            Log.Warning($"Killer process exited with code {exitCode}");
-
-            return false;
-        }
-    }
-
-    private async Task<bool> UnixTrySendShutdownSignalAsync(int timeout, CancellationToken cancellationToken)
-    {
-        try
-        {
-            string signal = await process.UnixGetSignalAsync(cancellationToken);
-
-            var killProc = Process.Start("kill", $"-s {signal} {process.Id}");
-            await killProc.WaitForExitAsync(1000, cancellationToken);
-            Debug.Assert(killProc.HasExited);
+            await process.StopGracefullyOrKillAsync(timeout, logger, cancellationToken);
 
             await process.WaitForExitAsync(timeout, cancellationToken);
         }
-        catch { }
 
-        return process.HasExited;
-    }
-
-    private async Task<string> UnixGetSignalAsync(CancellationToken cancellationToken)
-    {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        public async Task<bool> TryStopGracefullyAsync(TimeSpan timeout, ILogger logger, CancellationToken cancellationToken)
         {
             try
             {
-                // We want to see WHERE the symlink points, not read its contents.
-                var linkInfo = File.ResolveLinkTarget($"/proc/{process.Id}/fd/0", returnFinalTarget: true);
-                string targetPath = linkInfo?.FullName ?? string.Empty;
-
-                if (targetPath.Contains("/dev/tty") || targetPath.Contains("/dev/pts"))
+                if (process.HasExited)
                 {
-                    return "INT";
+                    return true;
                 }
             }
-            catch { }
-        }
-        else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-        {
-            var psi = new ProcessStartInfo
+            catch (InvalidOperationException)
             {
-                FileName = "ps",
-                Arguments = $"-o tty= -p {process.Id}",
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
+                // no associated process
+                return true;
+            }
+
+            try
+            {
+                if (OperatingSystem.IsWindows())
+                {
+                    if (await process.WindowsTrySendCtrlCAsync(timeout, logger, cancellationToken))
+                    {
+                        return true;
+                    }
+
+                    if (await process.TryCloseMainWindowAsync(timeout, cancellationToken))
+                    {
+                        return true;
+                    }
+                }
+                else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+                {
+                    if (await process.UnixTrySendShutdownSignalAsync(timeout, cancellationToken))
+                    {
+                        return true;
+                    }
+                }
+                else
+                {
+                    throw new NotImplementedException($"OS {Environment.OSVersion} is not supported.");
+                }
+            }
+            catch (Exception exception) when (exception is not NotImplementedException)
+            {
+            }
+
+            return process.HasExited;
+        }
+
+        public async Task WaitForExitAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(timeout);
+
+            try
+            {
+                await process.WaitForExitAsync(timeoutCts.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException($"Process '{process.ProcessName}' failed to exit within {timeout.TotalSeconds} seconds.");
+            }
+        }
+
+        #region Async
+        [SupportedOSPlatform("windows")]
+        private async Task<bool> WindowsTrySendCtrlCAsync(TimeSpan timeout, ILogger logger, CancellationToken cancellationToken)
+        {
+            var exePath = Path.GetFullPath("Solace.KillHelper.exe");
+
+            var startInfo = new ProcessStartInfo(exePath, [process.Id.ToString(CultureInfo.InvariantCulture)])
+            {
+                UseShellExecute = true,
+                CreateNoWindow = false
             };
 
-            using var ps = Process.Start(psi);
-            if (ps is not null)
+            using (var killProcess = Process.Start(startInfo))
             {
-                string tty = await ps.StandardOutput.ReadToEndAsync(cancellationToken);
-                await ps.WaitForExitAsync(cancellationToken);
-
-                if (!string.IsNullOrWhiteSpace(tty) && !tty.Contains('?'))
+                if (killProcess is null)
                 {
-                    return "INT";
+                    LogKillerProcessStartFail(logger);
+                    return false;
                 }
-            }
-        }
 
-        return "TERM";
-    }
+                await killProcess.WaitForExitAsync(cancellationToken);
+                var exitCode = killProcess.ExitCode;
 
-    private async Task<bool> TryCloseMainWindowAsync(int timeout, CancellationToken cancellationToken)
-    {
-        try
-        {
-            if (!process.CloseMainWindow())
-            {
+                if (exitCode is 0)
+                {
+                    await process.WaitForExitAsync(timeout, cancellationToken);
+                    return process.HasExited;
+                }
+
+                LogKillerProcessExitFail(logger, exitCode);
+
                 return false;
             }
-
-            await process.WaitForExitAsync(timeout, cancellationToken);
         }
-        catch { }
 
-        return process.HasExited;
+        private async Task<bool> UnixTrySendShutdownSignalAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var signal = await process.UnixGetSignalAsync(cancellationToken);
+
+                var killProc = Process.Start("kill", $"-s {signal} {process.Id}");
+                await killProc.WaitForExitAsync(TimeSpan.FromSeconds(1), cancellationToken);
+                Debug.Assert(killProc.HasExited);
+
+                await process.WaitForExitAsync(timeout, cancellationToken);
+            }
+            catch
+            {
+            }
+
+            return process.HasExited;
+        }
+
+        private async Task<string> UnixGetSignalAsync(CancellationToken cancellationToken)
+        {
+            if (OperatingSystem.IsLinux())
+            {
+                try
+                {
+                    // We want to see WHERE the symlink points, not read its contents.
+                    var linkInfo = File.ResolveLinkTarget($"/proc/{process.Id}/fd/0", returnFinalTarget: true);
+                    var targetPath = linkInfo?.FullName ?? string.Empty;
+
+                    if (targetPath.Contains("/dev/tty", StringComparison.Ordinal) || targetPath.Contains("/dev/pts", StringComparison.Ordinal))
+                    {
+                        return "INT";
+                    }
+                }
+                catch { }
+            }
+            else if (OperatingSystem.IsMacOS())
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "ps",
+                    Arguments = $"-o tty= -p {process.Id}",
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                using var ps = Process.Start(psi);
+                if (ps is not null)
+                {
+                    var tty = await ps.StandardOutput.ReadToEndAsync(cancellationToken);
+                    await ps.WaitForExitAsync(cancellationToken);
+
+                    if (!string.IsNullOrWhiteSpace(tty) && !tty.Contains('?', StringComparison.Ordinal))
+                    {
+                        return "INT";
+                    }
+                }
+            }
+
+            return "TERM";
+        }
+
+        private async Task<bool> TryCloseMainWindowAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            try
+            {
+                if (!process.CloseMainWindow())
+                {
+                    return false;
+                }
+
+                await process.WaitForExitAsync(timeout, cancellationToken);
+            }
+            catch
+            {
+            }
+
+            return process.HasExited;
+        }
+        #endregion
     }
-    #endregion
-    }
 
-    [LibraryImport("kernel32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool AttachConsole(uint dwProcessId);
+    [LoggerMessage(Level = LogLevel.Error, Message = "Failed to start killer process")]
+    private static partial void LogKillerProcessStartFail(ILogger logger);
 
-    [LibraryImport("kernel32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool FreeConsole();
-
-    [LibraryImport("kernel32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool GenerateConsoleCtrlEvent(uint dwCtrlEvent, uint dwProcessGroupId);
-
-    [LibraryImport("kernel32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool SetConsoleCtrlHandler(ConsoleCtrlDelegate? handler, [MarshalAs(UnmanagedType.Bool)] bool add);
-
-    private delegate bool ConsoleCtrlDelegate(uint ctrlType);
-
-    private const uint CTRL_C_EVENT = 0;
-    private const uint ATTACH_PARENT_PROCESS = 0xFFFFFFFF;
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Killer process exited with code {ExitCode}")]
+    private static partial void LogKillerProcessExitFail(ILogger logger, int ExitCode);
 }

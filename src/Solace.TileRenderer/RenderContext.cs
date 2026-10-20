@@ -2,7 +2,7 @@
 
 namespace Solace.TileRenderer;
 
-public readonly struct RenderContext
+internal readonly struct RenderContext
 {
     private readonly List<string> _tags;
     private readonly Dictionary<string, Dictionary<string, RenderLayer>> _tagsMap;

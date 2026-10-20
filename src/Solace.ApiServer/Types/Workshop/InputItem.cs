@@ -1,7 +1,7 @@
 ﻿namespace Solace.ApiServer.Types.Workshop;
 
-public sealed record InputItem(
-     string ItemId,
+internal sealed record InputItem(
+     Guid ItemId,
      int Quantity,
-     string[] InstanceIds
+     Guid[] InstanceIds
 );

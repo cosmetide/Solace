@@ -1,0 +1,199 @@
+﻿using System.Diagnostics;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Microsoft.Extensions.Logging;
+using Solace.Buildplate.PreviewGenerator.NBT;
+using Solace.Buildplate.PreviewGenerator.Utils;
+
+namespace Solace.Buildplate.PreviewGenerator.Registry;
+
+public static partial class BedrockBlocks
+{
+    private static readonly Dictionary<BlockNameAndState, int> stateToIdMap = [];
+    private static readonly Dictionary<int, BlockNameAndState> idToStateMap = [];
+
+    private static readonly Lock _initLock = new();
+    private static volatile bool _isInitialized;
+
+    public static int AirId { get; private set; }
+    public static int WaterId { get; private set; }
+
+    private static void EnsureInitialized()
+    {
+        if (!_isInitialized)
+        {
+            lock (_initLock)
+            {
+                if (!_isInitialized)
+                {
+                    throw new InvalidOperationException("Data has not been initialized." + new StackFrame().ToString());
+                }
+            }
+        }
+    }
+
+    public static void Initialize(string staticData, ILogger logger)
+    {
+        if (!_isInitialized)
+        {
+            lock (_initLock)
+            {
+                if (!_isInitialized)
+                {
+                    InitializeInternal(staticData, logger);
+                    _isInitialized = true;
+                }
+            }
+        }
+    }
+
+    private static void InitializeInternal(string staticData, ILogger logger)
+    {
+        DataFile.Load(Path.Combine(staticData, "registry", "blocks_bedrock.json"), logger, _root =>
+        {
+            var root = (JsonArray)_root;
+            foreach (var _element in root)
+            {
+                var element = _element as JsonObject;
+                Debug.Assert(element is not null);
+
+                var id = element["id"]!.GetValue<int>();
+                var name = element["name"]!.GetValue<string>()!;
+                SortedDictionary<string, object> state = [with(StringComparer.Ordinal)];
+                var stateObject = (JsonObject)element["state"]!;
+                foreach (var entry in stateObject)
+                {
+                    Debug.Assert(entry.Value is JsonValue);
+                    var stateElement = (JsonValue)entry.Value;
+                    if (stateElement.GetValueKind() == JsonValueKind.String)
+                    {
+                        state[entry.Key] = stateElement.GetValue<string>()!;
+                    }
+                    else
+                    {
+                        state[entry.Key] = stateElement.GetValue<int>();
+                    }
+                }
+
+                var blockNameAndState = new BlockNameAndState(name, state);
+                if (!stateToIdMap.TryAdd(blockNameAndState, id))
+                {
+                    LogDuplicateBedrockBlockNameState(logger, name);
+                }
+
+                if (!idToStateMap.TryAdd(id, blockNameAndState))
+                {
+                    LogDuplicateBedrockBlockId(logger, id);
+                }
+            }
+        });
+
+        _isInitialized = true;
+
+        AirId = BedrockBlocks.GetId("minecraft:air", [with(StringComparer.Ordinal)]);
+        SortedDictionary<string, object> hashMap = new(StringComparer.Ordinal)
+        {
+            { "liquid_depth", 0 }
+        };
+        WaterId = BedrockBlocks.GetId("minecraft:water", hashMap);
+    }
+
+    public static int GetId(string name, SortedDictionary<string, object> state)
+    {
+        EnsureInitialized();
+
+        var blockNameAndState = new BlockNameAndState(name, state);
+        return stateToIdMap.GetValueOrDefault(blockNameAndState, -1);
+    }
+
+    public static string? GetName(int id)
+    {
+        EnsureInitialized();
+
+        var blockNameAndState = idToStateMap.GetValueOrDefault(id);
+        return blockNameAndState?.Name;
+    }
+
+    public static Dictionary<string, object>? GetState(int id)
+    {
+        EnsureInitialized();
+
+        var blockNameAndState = idToStateMap.GetValueOrDefault(id);
+        if (blockNameAndState is null)
+        {
+            return null;
+        }
+
+        Dictionary<string, object> state = [with(StringComparer.Ordinal)];
+        foreach (var (key, value) in blockNameAndState.State)
+        {
+            state[key] = value;
+        }
+
+        return state;
+    }
+
+    public static NbtMap? GetStateNbt(int id)
+    {
+        EnsureInitialized();
+
+        var blockNameAndState = idToStateMap.GetValueOrDefault(id);
+        if (blockNameAndState is null)
+        {
+            return null;
+        }
+
+        var builder = NbtMap.Builder();
+        foreach (var (key, value) in blockNameAndState.State)
+        {
+            if (value is string s)
+            {
+                builder.PutString(key, s);
+            }
+            else if (value is int i)
+            {
+                builder.PutInt(key, i);
+            }
+            else
+            {
+                throw new InvalidOperationException();
+            }
+        }
+
+        return builder.Build();
+    }
+
+    private sealed class BlockNameAndState
+    {
+        public readonly string Name;
+        public readonly SortedDictionary<string, object> State;
+
+        public BlockNameAndState(string name, SortedDictionary<string, object> state)
+        {
+            Name = name;
+            State = state;
+        }
+
+        public override int GetHashCode()
+        {
+            var hash = new HashCode();
+            hash.Add(Name, StringComparer.Ordinal);
+            foreach (var kvp in State)
+            {
+                hash.Add(kvp.Key, StringComparer.Ordinal);
+                hash.Add(kvp.Value);
+            }
+
+            return hash.ToHashCode();
+        }
+
+        public override bool Equals(object? obj)
+            => obj is BlockNameAndState other && Name.Equals(other.Name, StringComparison.Ordinal) && State.SequenceEqual(other.State);
+    }
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Duplicate Bedrock block name/state '{Name}'")]
+    private static partial void LogDuplicateBedrockBlockNameState(ILogger logger, string Name);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Duplicate Bedrock block ID '{Id}'")]
+    private static partial void LogDuplicateBedrockBlockId(ILogger logger, int Id);
+}

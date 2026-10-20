@@ -1,12 +1,12 @@
 ﻿namespace Solace.ApiServer.Types.Common;
 
-public sealed record Effect(
+internal sealed record Effect(
     string Type,
     string? Duration,
-    int? Value,
+    float? Value,
     string? Unit,
     string Targets,
-    string[] Items,
+    Guid[] Items,
     string[] ItemScenarios,
     string Activation,
     string? ModifiesType

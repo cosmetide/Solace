@@ -1,12 +1,13 @@
-﻿using Solace.Common.Utils;
+﻿using BitcoderCZ.IO;
+using Solace.Common.Utils;
 
 namespace Solace.ObjectStore.Server;
 
-public class DataStore
+internal sealed class DataStore
 {
-    private readonly DirectoryInfo _rootDirectory;
+    private readonly AbsoluteDirectory _rootDirectory;
 
-    public DataStore(DirectoryInfo rootDirectory)
+    public DataStore(AbsoluteDirectory rootDirectory)
     {
         _rootDirectory = rootDirectory;
 
@@ -16,64 +17,149 @@ public class DataStore
         }
     }
 
-    public async Task<string> StoreAsync(byte[] data)
+    public long GetTotalSize(CancellationToken cancellationToken = default)
     {
-        string id = Guid.NewGuid().ToString();
+        if (!_rootDirectory.Exists)
+        {
+            return 0;
+        }
 
-        var dir = new DirectoryInfo(Path.Combine(_rootDirectory.FullName, id[..2]));
+        long result = 0;
+
+        foreach (var subDir in _rootDirectory.EnumerateDirectories(SearchOption.TopDirectoryOnly))
+        {
+            foreach (var file in subDir.EnumerateFiles(SearchOption.TopDirectoryOnly))
+            {
+                result += file.Length;
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+        }
+
+        return result;
+    }
+
+    public IEnumerable<Guid> EnumerateIds(CancellationToken cancellationToken = default)
+    {
+        if (!_rootDirectory.Exists)
+        {
+            yield break;
+        }
+
+        foreach (var file in _rootDirectory.EnumerateFiles(SearchOption.AllDirectories))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (Guid.TryParse(file.Name, out var id))
+            {
+                yield return id;
+            }
+        }
+    }
+
+    public void DeleteAll()
+        => _rootDirectory.SafeDelete(recursive: true);
+
+    public async Task<Guid> StoreAsync(Guid? id, Stream data, CancellationToken cancellationToken = default)
+    {
+        id ??= Guid.CreateVersion7();
+        var idString = id.Value.ToString();
+
+        var dir = _rootDirectory / idString[..2];
         if (!dir.Exists)
         {
             dir.Create();
         }
 
-        var file = new FileInfo(Path.Combine(dir.FullName, id));
+        var file = dir / new RelativeFile(idString);
 
         try
         {
-            await File.WriteAllBytesAsync(file.FullName, data);
+            using var fileStream = file.OpenWrite(true);
+            await data.CopyToAsync(fileStream, cancellationToken);
         }
-        catch (IOException ex)
+        catch (UnauthorizedAccessException exception)
         {
             file.Delete();
-            throw new DataStoreException(ex);
+            throw new DataStoreException($"Permission denied writing object file '{file.Value}'", exception);
+        }
+        catch (IOException exception)
+        {
+            file.Delete();
+            throw new DataStoreException(exception);
         }
 
-        return id;
+        return id.Value;
     }
 
-    public async Task<byte[]?> LoadAsync(string id)
+    public async Task<(Stream? Stream, long Length)> LoadAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        var file = new FileInfo(Path.Combine(_rootDirectory.FullName, id[..2], id));
+        _ = cancellationToken;
+
+        var idString = id.ToString();
+
+        var file = _rootDirectory / idString[..2] / new RelativeFile(idString);
         if (!file.Exists)
         {
-            return null;
+            return (null, 0);
         }
 
         try
         {
-            return await File.ReadAllBytesAsync(file.FullName);
+            return (file.OpenRead(), file.Length);
         }
-        catch (IOException ex)
+        catch (IOException exception)
         {
-            throw new DataStoreException(ex);
+            throw new DataStoreException(exception);
         }
     }
 
-    public async Task DeleteAsync(string id)
+    public async Task<bool> ExistsAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        var file = new FileInfo(Path.Combine(_rootDirectory.FullName, id[..2], id));
-        file.Delete();
+        _ = cancellationToken;
+
+        var idString = id.ToString();
+
+        var file = _rootDirectory / idString[..2] / new RelativeFile(idString);
+
+        return file.Exists;
     }
 
-    public class DataStoreException : Exception
+    public async Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken = default)
     {
+        _ = cancellationToken;
+
+        var idString = id.ToString();
+
+        var file = _rootDirectory / idString[..2] / new RelativeFile(idString);
+
+        if (file.Exists)
+        {
+            // throws if parent directory does not exist - guard with Exists
+            file.Delete();
+            return true;
+        }
+
+        return false;
+    }
+
+    internal sealed class DataStoreException : Exception
+    {
+        public DataStoreException()
+        {
+        }
+
         public DataStoreException(string? message)
             : base(message)
         {
         }
 
-        public DataStoreException(Exception? cause)
-            : base(null, cause)
+        public DataStoreException(Exception? innerException)
+            : base(null, innerException)
+        {
+        }
+
+        public DataStoreException(string? message, Exception? innerException)
+            : base(message, innerException)
         {
         }
     }

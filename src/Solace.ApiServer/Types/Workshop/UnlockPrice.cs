@@ -1,6 +1,6 @@
 ﻿namespace Solace.ApiServer.Types.Workshop;
 
-public sealed record UnlockPrice(
+internal sealed record UnlockPrice(
     int Cost,
     int Discount
 );

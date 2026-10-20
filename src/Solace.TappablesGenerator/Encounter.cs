@@ -3,41 +3,43 @@ using System.Text.Json.Serialization;
 
 namespace Solace.TappablesGenerator;
 
-public sealed record Encounter(
+internal sealed record Encounter(
     Guid Id,
     float Lat,
     float Lon,
-    long SpawnTime,
-    long ValidFor,
+    DateTimeOffset SpawnTime,
+    TimeSpan ValidFor,
     string Icon,
     Encounter.RarityE Rarity,
     string EncounterBuildplateId
 )
 {
-    [JsonConverter(typeof(JsonStringEnumConverter))]
-    public enum RarityE
+    [JsonConverter(typeof(JsonStringEnumConverter<RarityE>))]
+    internal enum RarityE
     {
         COMMON,
         UNCOMMON,
         RARE,
         EPIC,
-        LEGENDARY
+        LEGENDARY,
     }
 }
 
-public static class EncounterRarityExtensions
+#pragma warning disable MA0048 // File name must match type name
+internal static class EncounterRarityExtensions
+#pragma warning restore MA0048 // File name must match type name
 {
     extension(Encounter.RarityE)
     {
-        public static Encounter.RarityE FromStaticData(StaticData.EncountersConfig.EncounterConfig.RarityE rarity)
+        public static Encounter.RarityE FromStaticData(StaticData.EncountersConfig.EncounterRarity rarity)
             => rarity switch
             {
-                StaticData.EncountersConfig.EncounterConfig.RarityE.COMMON => Encounter.RarityE.COMMON,
-                StaticData.EncountersConfig.EncounterConfig.RarityE.UNCOMMON => Encounter.RarityE.UNCOMMON,
-                StaticData.EncountersConfig.EncounterConfig.RarityE.RARE => Encounter.RarityE.RARE,
-                StaticData.EncountersConfig.EncounterConfig.RarityE.EPIC => Encounter.RarityE.EPIC,
-                StaticData.EncountersConfig.EncounterConfig.RarityE.LEGENDARY => Encounter.RarityE.LEGENDARY,
-                _ => throw new InvalidEnumArgumentException(nameof(rarity), (int)rarity, typeof(StaticData.EncountersConfig.EncounterConfig.RarityE)),
+                StaticData.EncountersConfig.EncounterRarity.COMMON => Encounter.RarityE.COMMON,
+                StaticData.EncountersConfig.EncounterRarity.UNCOMMON => Encounter.RarityE.UNCOMMON,
+                StaticData.EncountersConfig.EncounterRarity.RARE => Encounter.RarityE.RARE,
+                StaticData.EncountersConfig.EncounterRarity.EPIC => Encounter.RarityE.EPIC,
+                StaticData.EncountersConfig.EncounterRarity.LEGENDARY => Encounter.RarityE.LEGENDARY,
+                _ => throw new InvalidEnumArgumentException(nameof(rarity), (int)rarity, typeof(StaticData.EncountersConfig.EncounterRarity)),
             };
     }
 }

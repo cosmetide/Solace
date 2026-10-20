@@ -1,5 +1,5 @@
 ﻿namespace Solace.ApiServer.Types.Workshop;
 
-public sealed record BoostState(
+internal sealed record BoostState(
 // TODO
 );

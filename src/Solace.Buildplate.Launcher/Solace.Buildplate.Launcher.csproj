@@ -1,0 +1,77 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>BuildplateLauncher</AssemblyName>
+    <PublishTrimmed>true</PublishTrimmed>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+  </PropertyGroup>
+
+  <Target Name="MoveDependenciesToShared" AfterTargets="Publish" Condition="'$(UseSharedLibs)' == 'true'">
+
+    <PropertyGroup>
+      <SharedLibsDir>$([System.IO.Path]::GetFullPath('$(PublishDir)../shared_libs'))/</SharedLibsDir>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <FilesToMove Include="$(PublishDir)*.dll;$(PublishDir)*.pdb" Exclude="$(PublishDir)$(TargetName).dll;$(PublishDir)$(TargetName).pdb" />
+    </ItemGroup>
+
+    <MakeDir Directories="$(SharedLibsDir)" />
+
+    <Copy SourceFiles="@(FilesToMove)" DestinationFolder="$(SharedLibsDir)" SkipUnchangedFiles="true" Retries="5" RetryDelayMilliseconds="500" />
+
+    <Delete Files="@(FilesToMove)" />
+
+  </Target>
+
+  <PropertyGroup Condition="'$(UseSharedLibs)' == 'true'">
+    <DefineConstants>$(DefineConstants);USE_SHARED_LIBS</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Cyotek.Data.Nbt" />
+    <PackageReference Include="ReentrantAsyncLock" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Solace.Buildplate.Common/Solace.Buildplate.Common.csproj" />
+    <ProjectReference Include="../Solace.ServiceDefaults/Solace.ServiceDefaults.csproj" />
+    <ProjectReference Include="../Solace.Common/Solace.Common.csproj" />
+    <ProjectReference Include="../Solace.EventBus.Client/Solace.EventBus.Client.csproj" />
+    <ProjectReference Include="../Solace.ObjectStore.Client/Solace.ObjectStore.Client.csproj" />
+    <ProjectReference Include="../Solace.Buildplate.PreviewGenerator/Solace.Buildplate.PreviewGenerator.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="registry/biomes_bedrock.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="registry/blocks_bedrock.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="registry/blocks_java.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="registry/blocks_java_nonvanilla.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="registry/entities.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="registry/items_bedrock.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="registry/items_catalog.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="registry/items_java.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

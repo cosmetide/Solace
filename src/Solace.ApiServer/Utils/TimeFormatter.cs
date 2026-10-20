@@ -7,33 +7,32 @@ public static class TimeFormatter
     private static readonly string JSON_DATE_FORMAT = "yyyy-MM-ddTHH:mm:ssZ";
 
     public static string FormatTime(long time)
-    {
-        DateTime dateTime = DateTimeOffset.FromUnixTimeMilliseconds(time).UtcDateTime;
-        return FormatTime(dateTime);
-    }
-    public static string FormatTime(DateTime dateTime)
-        => dateTime.ToString(JSON_DATE_FORMAT, CultureInfo.InvariantCulture);
+        => FormatTime(DateTimeOffset.FromUnixTimeMilliseconds(time));
+
+    public static string FormatTime(DateTimeOffset dateTime)
+        => dateTime.UtcDateTime.ToString(JSON_DATE_FORMAT, CultureInfo.InvariantCulture);
 
     public static string FormatDuration(long duration)
-    {
-        var timeSpan = TimeSpan.FromMilliseconds(duration);
-        return FormatDuration(timeSpan);
-    }
+        => FormatDuration(TimeSpan.FromMilliseconds(duration));
+
     public static string FormatDuration(TimeSpan timeSpan)
         => $"{(int)timeSpan.TotalHours}:{timeSpan.Minutes:D2}:{timeSpan.Seconds:D2}";
 
-    public static long ParseDuration(string duration)
+    public static DateTimeOffset ParseTime(string time)
+        => DateTimeOffset.Parse(time, CultureInfo.InvariantCulture);
+
+    public static TimeSpan ParseDuration(string duration)
     {
-        string[] parts = duration.Split(':');
+        var parts = duration.Split(':');
         if (parts.Length < 3)
         {
-            throw new ArgumentException("Invalid duration format");
+            throw new ArgumentException("Invalid duration format", nameof(duration));
         }
 
-        long hours = long.Parse(parts[0]);
-        long minutes = long.Parse(parts[1]);
-        long seconds = long.Parse(parts[2]);
+        var hours = long.Parse(parts[0], CultureInfo.InvariantCulture);
+        var minutes = long.Parse(parts[1], CultureInfo.InvariantCulture);
+        var seconds = long.Parse(parts[2], CultureInfo.InvariantCulture);
 
-        return (hours * 3600 + minutes * 60 + seconds) * 1000L;
+        return TimeSpan.FromSeconds(hours * 3600 + minutes * 60 + seconds);
     }
 }

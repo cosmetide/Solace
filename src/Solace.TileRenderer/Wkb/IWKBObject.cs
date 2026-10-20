@@ -2,7 +2,7 @@
 
 namespace Solace.TileRenderer.Wkb;
 
-public interface IWKBObject
+internal interface IWKBObject
 {
     bool ByteOrder { get; }
 

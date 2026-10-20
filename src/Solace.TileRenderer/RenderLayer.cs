@@ -1,6 +1,6 @@
 ﻿namespace Solace.TileRenderer;
 
-public enum RenderLayer // Layer order is bottom to top btw, not in same order as Genoa Colours!!!
+internal enum RenderLayer // Layer order is bottom to top btw, not in same order as Genoa Colours!!!
 {
 #pragma warning disable CA1707 // Identifiers should not contain underscores
     LAYER_BASE_BACKGROUND,

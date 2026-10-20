@@ -1,0 +1,162 @@
+syntax = "proto3";
+
+import "google/protobuf/timestamp.proto";
+
+option csharp_namespace = "Solace.EventBus";
+option java_multiple_files = true;
+option java_package = "earthrestored.solace.eventbus.client";
+option java_outer_classname = "EventBusProto";
+
+package eventbus;
+
+service EventBusService {
+    rpc Publish (PublishRequest) returns (PublishResponse);
+    rpc PublishStream (stream PublishChunk) returns (PublishResponse);
+    
+    rpc Subscribe (SubscribeRequest) returns (stream EventMessage);
+    
+    rpc Request (RequestMessage) returns (ResponseMessage);
+    rpc RequestStream (stream RequestChunk) returns (stream ResponseChunk);
+    
+    rpc HandleRequests (stream ClientMessage) returns (stream ServerMessage);
+}
+
+message PublishRequest {
+    string queue_name = 1;
+    string type = 2;
+    oneof payload {
+        string string_data = 3;
+        bytes binary_data = 4;
+    }
+}
+
+message PublishChunk {
+    oneof payload {
+        PublishMetadata metadata = 1;
+        bytes chunk_data = 2;
+    }
+}
+
+message PublishMetadata {
+    string queue_name = 1;
+    string type = 2;
+}
+
+message PublishResponse {
+    bool success = 1;
+}
+
+message SubscribeRequest {
+    string queue_name = 1;
+}
+
+message EventMessage {
+    string type = 1;
+    google.protobuf.Timestamp timestamp = 3;
+    
+    uint64 stream_id = 4;
+    bool is_last_chunk = 5;
+
+    oneof payload {
+        string string_data = 2;
+        bytes binary_data = 6;
+    }
+
+    bool subscription_ready = 7;
+}
+
+message RequestMessage {
+    string queue_name = 1;
+    string type = 2;
+    oneof payload {
+        string string_data = 3;
+        bytes binary_data = 4;
+    }
+}
+
+message ResponseMessage {
+    Status status = 2;
+    string error_message = 3;
+
+    oneof payload {
+        string string_data = 1;
+        bytes binary_data = 4;
+    }
+
+    enum Status
+    {
+        Success = 0;
+        NoHandlers = 1;
+        HandlerError = 2;
+        ServerError = 3;
+    }
+}
+
+message RequestChunk {
+    bool is_last_chunk = 1;
+    oneof payload {
+        RequestMetadata metadata = 2;
+        bytes chunk_data = 3;
+    }
+}
+
+message RequestMetadata {
+    string queue_name = 1;
+    string type = 2;
+    oneof payload {
+        string string_data = 3;
+        bytes binary_data = 4;
+        bool is_stream = 5;
+    }
+}
+
+message ResponseChunk {
+    ResponseMessage.Status status = 1;
+    string error_message = 2;
+    bool is_stream = 3;
+    bool is_last_chunk = 4;
+
+    oneof payload {
+        string string_data = 5;
+        bytes binary_data = 6;
+    }
+}
+
+message ClientMessage {
+    oneof payload {
+        string register_queue = 1;
+        HandlerResponse response = 2;
+    }
+}
+
+message HandlerResponse {
+    uint64 correlation_id = 1;
+    Status status = 3;
+    bool is_stream = 4;
+    bool is_last_chunk = 5;
+
+    oneof payload {
+        string string_data = 2;
+        bytes binary_data = 6;
+    }
+
+    enum Status {
+        Success = 0;
+        NotHandled = 1;
+        Error = 2;
+    }
+}
+
+message ServerMessage {
+    uint64 correlation_id = 1;
+    string type = 2;
+    google.protobuf.Timestamp timestamp = 4;
+    bool is_stream = 6;
+    bool is_last_chunk = 7;
+    bool handler_ready = 8;
+
+    oneof payload {
+        string string_data = 3;
+        bytes binary_data = 5;
+    }
+}

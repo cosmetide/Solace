@@ -1,10 +1,11 @@
-﻿using Solace.TileRenderer.Wkb;
+﻿using Microsoft.Extensions.Logging;
+using Solace.TileRenderer.Wkb;
 
 namespace Solace.TileRenderer;
 
-public interface ITileDataSource : IDisposable
+internal interface ITileDataSource : IDisposable
 {
     string GetTagMapJson(StaticData.TileRenderer tileRenderer);
 
-    Task<List<List<IWKBObject>>> GetTileAsync(RenderContext ctx, int zoom, int tileX, int tileY, CancellationToken cancellationToken = default);
+    Task<List<List<IWKBObject>>> GetTileAsync(RenderContext ctx, int zoom, int tileX, int tileY, ILogger logger, CancellationToken cancellationToken = default);
 }

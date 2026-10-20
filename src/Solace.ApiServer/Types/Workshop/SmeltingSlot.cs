@@ -2,11 +2,11 @@
 
 namespace Solace.ApiServer.Types.Workshop;
 
-public record SmeltingSlot(
+internal sealed record SmeltingSlot(
     SmeltingSlot.FuelR? Fuel,
     SmeltingSlot.BurningR? Burning,
     string? SessionId,
-    string? RecipeId,
+    Guid? RecipeId,
     OutputItem? Output,
     InputItem[]? Escrow,
     int Completed,
@@ -20,14 +20,14 @@ public record SmeltingSlot(
     int StreamVersion
 )
 {
-    public sealed record FuelR(
+    internal sealed record FuelR(
         BurnRate BurnRate,
-        string ItemId,
+        Guid ItemId,
         int Quantity,
-        string[] ItemInstanceIds
+        Guid[] ItemInstanceIds
     );
 
-    public sealed record BurningR(
+    internal sealed record BurningR(
         string? BurnStartTime,
         string? BurnsUntil,
         string? RemainingBurnTime,

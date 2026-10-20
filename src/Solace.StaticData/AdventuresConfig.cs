@@ -1,17 +1,17 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Text.Json;
 using System.Text.Json.Serialization;
-using Solace.Common;
 
 namespace Solace.StaticData;
 
 public sealed class AdventuresConfig
 {
-    public const string CommonAdventureCrystalId = "4f16a053-4929-263a-c91a-29663e29df76";
+    public static readonly Guid CommonAdventureCrystalId = Guid.Parse("4f16a053-4929-263a-c91a-29663e29df76");
     private static readonly string[] DefaultFolders = ["common", "uncommon", "rare", "epic", "legendary", "oobe"];
 
     public readonly AdventureSpawnConfig SpawnConfig;
-    private readonly Dictionary<string, ImmutableArray<AdventureBuildplate>> _buildplatesByFolder = [];
+    private readonly Dictionary<string, ImmutableArray<AdventureBuildplate>> _buildplatesByFolder = [with(StringComparer.Ordinal)];
 
     internal AdventuresConfig(string dir)
     {
@@ -19,22 +19,22 @@ public sealed class AdventuresConfig
         {
             SpawnConfig = LoadSpawnConfig(dir);
 
-            HashSet<string> folders = [.. DefaultFolders];
-            foreach (AdventureCrystalType crystalType in SpawnConfig.CrystalTypes)
+            HashSet<string> folders = [with(StringComparer.Ordinal), .. DefaultFolders];
+            foreach (var crystalType in SpawnConfig.CrystalTypes)
             {
                 folders.Add(crystalType.Folder);
             }
 
-            foreach (string folder in folders)
+            foreach (var folder in folders)
             {
-                string buildplatesFile = Path.Combine(dir, folder, $"{folder}-buildplates.json");
+                var buildplatesFile = Path.Combine(dir, folder, $"{folder}-buildplates.json");
                 if (!File.Exists(buildplatesFile))
                 {
                     continue;
                 }
 
                 using var stream = File.OpenRead(buildplatesFile);
-                AdventureBuildplatesFile? buildplates = Json.Deserialize<AdventureBuildplatesFile>(stream);
+                var buildplates = JsonSerializer.Deserialize(stream, AppJsonContext.Default.AdventureBuildplatesFile);
                 Debug.Assert(buildplates is not null);
 
                 _buildplatesByFolder[folder] = [.. buildplates.Buildplates
@@ -60,7 +60,7 @@ public sealed class AdventuresConfig
 
     public string? PickTemplateForFolder(string folder, Random random)
     {
-        if (!_buildplatesByFolder.TryGetValue(folder, out ImmutableArray<AdventureBuildplate> buildplates) || buildplates.Length == 0)
+        if (!_buildplatesByFolder.TryGetValue(folder, out var buildplates) || buildplates.Length == 0)
         {
             return null;
         }
@@ -70,7 +70,7 @@ public sealed class AdventuresConfig
 
     public string? TryPickTemplateForCrystalItem(string itemName, Random random)
     {
-        string normalizedName = itemName.StartsWith("minecraft:", StringComparison.OrdinalIgnoreCase)
+        var normalizedName = itemName.StartsWith("minecraft:", StringComparison.OrdinalIgnoreCase)
             ? itemName["minecraft:".Length..]
             : itemName;
 
@@ -80,20 +80,20 @@ public sealed class AdventuresConfig
             return null;
         }
 
-        string folder = normalizedName[prefix.Length..];
+        var folder = normalizedName[prefix.Length..];
         return PickTemplateForFolder(folder, random);
     }
 
     private static AdventureSpawnConfig LoadSpawnConfig(string dir)
     {
-        string spawnConfigFile = Path.Combine(dir, "adventures-spawn.json");
+        var spawnConfigFile = Path.Combine(dir, "adventures-spawn.json");
         if (!File.Exists(spawnConfigFile))
         {
             return AdventureSpawnConfig.Disabled;
         }
 
         using var stream = File.OpenRead(spawnConfigFile);
-        AdventureSpawnConfig? spawnConfig = Json.Deserialize<AdventureSpawnConfig>(stream);
+        var spawnConfig = JsonSerializer.Deserialize(stream, AppJsonContext.Default.AdventureSpawnConfig);
         Debug.Assert(spawnConfig is not null);
         return spawnConfig;
     }
@@ -104,19 +104,21 @@ public sealed class AdventuresConfig
             .Select(item => (Item: item, Weight: int.Max(0, weightSelector(item))))
             .Where(item => item.Weight > 0)
             .ToArray();
-        int totalWeight = weightedItems.Sum(item => item.Weight);
+        var totalWeight = weightedItems.Sum(item => item.Weight);
         if (totalWeight <= 0)
         {
             return default;
         }
 
-        int roll = random.Next(0, totalWeight);
-        foreach (var item in weightedItems)
+#pragma warning disable CA5394 // Do not use insecure randomness - idc
+        var roll = random.Next(0, totalWeight);
+#pragma warning restore CA5394 // Do not use insecure randomness
+        foreach (var (item, weight) in weightedItems)
         {
-            roll -= item.Weight;
+            roll -= weight;
             if (roll < 0)
             {
-                return item.Item;
+                return item;
             }
         }
 
@@ -140,27 +142,27 @@ public sealed class AdventuresConfig
     public sealed record AdventureCrystalType(
         string Folder,
         string Icon,
-        AdventureCrystalType.RarityE Rarity,
+        AdventureCrystalType.AdventureCrystalRarity Rarity,
         int PickWeight
     )
     {
-        [JsonConverter(typeof(JsonStringEnumConverter))]
-        public enum RarityE
+        [JsonConverter(typeof(JsonStringEnumConverter<AdventureCrystalRarity>))]
+        public enum AdventureCrystalRarity
         {
             COMMON,
             UNCOMMON,
             RARE,
             EPIC,
             LEGENDARY,
-            OOBE
+            OOBE,
         }
     }
 
-    private sealed record AdventureBuildplatesFile(
+    internal sealed record AdventureBuildplatesFile(
         AdventureBuildplate[] Buildplates
     );
 
-    private sealed record AdventureBuildplate(
+    internal sealed record AdventureBuildplate(
         string TemplateId,
         int Weight
     );

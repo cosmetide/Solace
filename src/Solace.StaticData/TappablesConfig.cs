@@ -1,6 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Diagnostics;
-using Solace.Common;
+using System.Text.Json;
 
 namespace Solace.StaticData;
 
@@ -13,7 +13,7 @@ public sealed class TappablesConfig
         try
         {
             var tappables = ImmutableArray.CreateBuilder<TappableConfig>();
-            foreach (string file in Directory.EnumerateFiles(dir))
+            foreach (var file in Directory.EnumerateFiles(dir))
             {
                 if (Path.GetExtension(file) != ".json")
                 {
@@ -22,7 +22,7 @@ public sealed class TappablesConfig
 
                 using (var stream = File.OpenRead(file))
                 {
-                    var tappable = Json.Deserialize<TappableConfig>(stream);
+                    var tappable = JsonSerializer.Deserialize(stream, AppJsonContext.Default.TappableConfig);
 
                     Debug.Assert(tappable is not null);
 
@@ -32,12 +32,12 @@ public sealed class TappablesConfig
 
             Tappables = tappables.DrainToImmutable();
 
-            foreach (TappableConfig tappableConfig in Tappables)
+            foreach (var tappableConfig in Tappables)
 
             {
-                foreach (TappableConfig.DropSetR dropSet in tappableConfig.DropSets)
+                foreach (var dropSet in tappableConfig.DropSets)
                 {
-                    foreach (string itemId in dropSet.Items)
+                    foreach (var itemId in dropSet.Items)
                     {
                         if (!tappableConfig.ItemCounts.ContainsKey(itemId))
                         {
@@ -57,18 +57,18 @@ public sealed class TappablesConfig
         }
     }
 
-    public record TappableConfig(
+    public sealed record TappableConfig(
         string Icon,
         TappableConfig.DropSetR[] DropSets,
-        Dictionary<string, TappableConfig.ItemCount> ItemCounts
+        Dictionary<Guid, TappableConfig.ItemCount> ItemCounts
     )
     {
-        public record DropSetR(
-            string[] Items,
+        public sealed record DropSetR(
+            Guid[] Items,
             int Chance
         );
 
-        public record ItemCount(
+        public sealed record ItemCount(
             int Min,
             int Max
         );

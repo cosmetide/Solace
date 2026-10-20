@@ -1,0 +1,120 @@
+﻿using System.Collections;
+using System.Text.Json.Serialization;
+
+namespace Solace.Buildplate.PreviewGenerator.NBT;
+
+#pragma warning disable CA1010 // Generic interface should also be implemented
+public sealed class NbtList : IList, IList<object?>
+#pragma warning restore CA1010 // Generic interface should also be implemented
+{
+    public static readonly NbtList EMPTY = new(NbtType.End);
+
+    [JsonInclude, JsonPropertyName("type")]
+    public readonly NbtType _type;
+    [JsonInclude, JsonPropertyName("array")]
+    public readonly Array _array;
+
+    public bool IsFixedSize => true;
+
+    public bool IsReadOnly => true;
+
+    public int Count => _array.Length;
+
+    public bool IsSynchronized => false;
+
+    public object SyncRoot => null!;
+
+    public object? this[int index]
+    {
+        get => Get(index);
+        set => throw new InvalidOperationException();
+    }
+
+    public NbtList(NbtType type, ICollection collection)
+    {
+        ArgumentNullException.ThrowIfNull(type, nameof(type));
+        _type = type;
+        _array = CreateTypedArray(type, collection.Count);
+        collection.CopyTo(_array, 0);
+    }
+
+    public NbtList(NbtType tagClass, params object[] array)
+    {
+        ArgumentNullException.ThrowIfNull(tagClass, nameof(tagClass));
+        _type = tagClass;
+        _array = (Array)array.Clone();
+    }
+
+    private static Array CreateTypedArray(NbtType type, int length)
+        => type.Enum switch
+        {
+            NbtType.EnumE.Byte => new byte[length],
+            NbtType.EnumE.Short => new short[length],
+            NbtType.EnumE.Int => new int[length],
+            NbtType.EnumE.Long => new long[length],
+            NbtType.EnumE.Float => new float[length],
+            NbtType.EnumE.Double => new double[length],
+            NbtType.EnumE.ByteArray => new byte[length][],
+            NbtType.EnumE.String => new string[length],
+            NbtType.EnumE.List => new NbtList[length],
+            NbtType.EnumE.Compound => new NbtMap[length],
+            NbtType.EnumE.IntArray => new int[length][],
+            NbtType.EnumE.LongArray => new long[length][],
+            _ => new object[length]
+        };
+
+    public new NbtType GetType()
+        => _type;
+
+    public object Get(int index)
+    {
+        if (index < 0 || index >= _array.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(index), "Expected 0-" + (_array.Length - 1) + ". Got " + index);
+        }
+
+        return NbtUtils.Copy(_array.GetValue(index)!);
+    }
+
+    public int Size()
+        => _array.Length;
+
+    public int Add(object? value)
+        => throw new InvalidOperationException();
+
+    public void Clear()
+        => throw new InvalidOperationException();
+
+    public bool Contains(object? value)
+        => Array.IndexOf(_array, value) >= 0;
+
+    public int IndexOf(object? value)
+        => Array.IndexOf(_array, value);
+
+    public void Insert(int index, object? value)
+        => throw new InvalidOperationException();
+
+    public void Remove(object? value)
+        => throw new InvalidOperationException();
+
+    public void RemoveAt(int index)
+        => throw new InvalidOperationException();
+
+    public void CopyTo(Array array, int index)
+        => _array.CopyTo(array, index);
+
+    public IEnumerator GetEnumerator()
+        => _array.GetEnumerator();
+
+    void ICollection<object?>.Add(object? item)
+        => throw new InvalidOperationException();
+
+    public void CopyTo(object?[] array, int arrayIndex)
+        => _array.CopyTo(array, arrayIndex);
+
+    bool ICollection<object?>.Remove(object? item)
+        => throw new InvalidOperationException();
+
+    IEnumerator<object> IEnumerable<object?>.GetEnumerator()
+        => _array.Cast<object>().GetEnumerator();
+}

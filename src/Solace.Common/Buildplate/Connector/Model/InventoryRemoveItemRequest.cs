@@ -4,7 +4,7 @@ namespace Solace.Buildplate.Connector.Model;
 
 public sealed record InventoryRemoveItemRequest(
      Guid PlayerId,
-     string ItemId,
+     Guid ItemId,
      int Count,
-     string? InstanceId
+     Guid? InstanceId
 );

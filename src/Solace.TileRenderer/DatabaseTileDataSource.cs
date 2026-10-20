@@ -1,4 +1,5 @@
-﻿using Npgsql;
+﻿using Microsoft.Extensions.Logging;
+using Npgsql;
 using Solace.TileRenderer.Wkb;
 
 namespace Solace.TileRenderer;
@@ -15,7 +16,7 @@ internal sealed class DatabaseTileDataSource : ITileDataSource
     public string GetTagMapJson(StaticData.TileRenderer tileRenderer)
         => tileRenderer.TagMap1Json;
 
-    public async Task<List<List<IWKBObject>>> GetTileAsync(RenderContext ctx, int zoom, int tileX, int tileY, CancellationToken cancellationToken = default)
+    public async Task<List<List<IWKBObject>>> GetTileAsync(RenderContext ctx, int zoom, int tileX, int tileY, ILogger logger, CancellationToken cancellationToken = default)
     {
         const string Sql = @"
             SELECT aeroway, amenity, barrier, building, highway, landuse, leisure, military, ""natural"", railway, waterway, ST_AsBinary(way)
@@ -39,32 +40,34 @@ internal sealed class DatabaseTileDataSource : ITileDataSource
             await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
             List<List<IWKBObject>> layers = [];
-            for (int i = 0; i <= (int)RenderLayer.LAYER_NONE; i++)
+            for (var i = 0; i <= (int)RenderLayer.LAYER_NONE; i++)
             {
                 layers.Add([]);
             }
 
-            int rowCount = 0;
+            var rowCount = 0;
             while (await reader.ReadAsync(cancellationToken))
             {
                 rowCount++;
 
-                if (reader.IsDBNull(11)) // ST_AsBinary index
+                if (await reader.IsDBNullAsync(11, cancellationToken)) // ST_AsBinary index
                 {
                     continue;
                 }
 
-                RenderLayer targetLayer = RenderLayer.LAYER_NONE;
+                var targetLayer = RenderLayer.LAYER_NONE;
 
-                foreach (string tagName in ctx.Tags)
+                for (var i = 0; i < ctx.Tags.Length; i++)
                 {
-                    int ord = reader.GetOrdinal(tagName);
-                    if (reader.IsDBNull(ord))
+                    var tagName = ctx.Tags[i];
+
+                    var ord = reader.GetOrdinal(tagName);
+                    if (await reader.IsDBNullAsync(ord, cancellationToken))
                     {
                         continue;
                     }
 
-                    string tagValue = reader.GetString(ord);
+                    var tagValue = reader.GetString(ord);
 
                     if (ctx.TryGetLayer(tagName, tagValue, out targetLayer))
                     {
@@ -72,7 +75,7 @@ internal sealed class DatabaseTileDataSource : ITileDataSource
                     }
                 }
 
-                byte[] wkb = (byte[])reader[11];
+                var wkb = (byte[])reader[11];
                 if (wkb.Length < 5)
                 {
                     continue; // invalid
@@ -84,7 +87,7 @@ internal sealed class DatabaseTileDataSource : ITileDataSource
                 using var ms = new MemoryStream(wkb);
                 using var bReader = new BinaryReader(ms);
 
-                IWKBObject? obj = wkbType switch
+                var obj = wkbType switch
                 {
                     WkbGeometryType.Point => null,
                     WkbGeometryType.MultiPoint => null,

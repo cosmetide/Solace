@@ -1,0 +1,99 @@
+﻿using System.IO.Compression;
+using Cyotek.Data.Nbt;
+using Solace.Common.Utils;
+
+namespace Solace.Buildplate.PreviewGenerator;
+
+internal sealed class ServerDataZip
+{
+    public static ServerDataZip Read(Stream inputStream)
+        => new(inputStream);
+
+    private readonly Dictionary<string, byte[]> _files = [with(StringComparer.Ordinal)];
+
+    private ServerDataZip(Stream inputStream)
+    {
+        using var archive = new ZipArchive(inputStream);
+
+        foreach (var entry in archive.Entries)
+        {
+            if (entry.IsDirectory)
+            {
+                continue;
+            }
+
+            using (var entryStream = entry.Open())
+            using (var ms = new MemoryStream())
+            {
+                entryStream.CopyTo(ms);
+                _files.Add(entry.FullName, ms.ToArray());
+            }
+        }
+    }
+
+    public TagCompound GetChunkNBT(int x, int z)
+    {
+        var regionX = x >> 5;
+        var regionZ = z >> 5;
+        var chunkX = x & 31;
+        var chunkZ = z & 31;
+        var chunkIndex = (chunkZ << 5) | chunkX;
+
+        using var ms = new MemoryStream(_files[$"region/r.{regionX}.{regionZ}.mca"]);
+        using var reader = new BinaryReader(ms);
+
+        ms.Seek(chunkIndex * 4, SeekOrigin.Begin);
+        var offset = (int)(reader.ReadUInt32BE() >> 8);
+
+        ms.Seek(offset * 4096, SeekOrigin.Begin);
+
+        var length = (int)reader.ReadUInt32BE();
+        if (length < 1)
+        {
+            throw new IOException($"Invalid chunk length {length}");
+        }
+
+        var compressionType = reader.ReadByte();
+
+        // length includes the compression type
+        var compressed = new byte[length - 1];
+        ms.ReadExactly(compressed);
+        byte[] uncompressed;
+        switch (compressionType)
+        {
+            case 1:
+                {
+                    using var gZipStream = new GZipStream(new MemoryStream(compressed), CompressionMode.Decompress, false);
+                    using var resultStream = new MemoryStream();
+                    gZipStream.CopyTo(resultStream);
+                    uncompressed = resultStream.ToArray();
+                }
+
+                break;
+            case 2:
+                {
+                    using var deflateStream = new ZLibStream(new MemoryStream(compressed), CompressionMode.Decompress, false);
+                    using var resultStream = new MemoryStream();
+                    deflateStream.CopyTo(resultStream);
+                    uncompressed = resultStream.ToArray();
+                }
+
+                break;
+            case 3:
+                {
+                    uncompressed = compressed;
+                    break;
+                }
+            default:
+                throw new IOException($"Invalid compression type {compressionType}");
+        }
+
+        using (var tagStream = new MemoryStream(uncompressed))
+        {
+            var document = new NbtDocument();
+            document.Load(tagStream);
+
+            return document.DocumentRoot;
+        }
+    }
+}

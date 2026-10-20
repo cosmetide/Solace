@@ -1,6 +1,6 @@
 ﻿namespace Solace.TileRenderer.Wkb;
 
-public sealed class Tile
+internal sealed class Tile
 {
     public Tile(Point slippy, int zoom, int resolution)
     {
@@ -17,7 +17,7 @@ public sealed class Tile
 
     public Point ToLocalPixel(Point sphereMerc)
     {
-        Point slippy = TileUtils.SphereMercToSlippy(sphereMerc, Zoom);
+        var slippy = TileUtils.SphereMercToSlippy(sphereMerc, Zoom);
         slippy -= Slippy;
         slippy *= Resolution;
 

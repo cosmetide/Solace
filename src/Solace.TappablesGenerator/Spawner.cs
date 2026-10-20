@@ -1,97 +1,116 @@
-﻿using Serilog;
-using Solace.Common;
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Text.Json;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Solace.Common.Utils;
 using Solace.EventBus.Client;
 
 namespace Solace.TappablesGenerator;
 
-public class Spawner
+internal sealed partial class Spawner : IHostedService, IAsyncDisposable
 {
-    private static readonly long SPAWN_INTERVAL = 15 * 1000;
+    private static readonly TimeSpan SPAWN_INTERVAL = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan GRACE_PERIOD = TimeSpan.FromSeconds(5);
 
-    private readonly ActiveTiles _activeTiles;
+    private readonly EventBusClient _eventBus;
     private readonly TappableGenerator _tappableGenerator;
     private readonly EncounterGenerator _encounterGenerator;
-    private readonly Publisher _publisher;
+    private Publisher? _publisher;
+    private CancellationTokenSource _cts = new();
+    private volatile Task? _task;
+
+    private readonly ILogger<Spawner> _logger;
 
     private readonly int _maxTappableLifetimeIntervals;
 
-    private long _spawnCycleTime;
+    private DateTimeOffset _spawnCycleTime;
     private int _spawnCycleIndex;
-    private readonly Dictionary<int, int> _lastSpawnCycleForTile = [];
+    private readonly ConcurrentDictionary<int, int> _lastSpawnCycleForTile = [];
+    private readonly ConcurrentDictionary<int, ConcurrentDictionary<Guid, Tappable>> _tappables = [];
+    private readonly ConcurrentDictionary<int, ConcurrentDictionary<Guid, Encounter>> _encounters = [];
 
-    public Spawner(ActiveTiles activeTiles, TappableGenerator tappableGenerator, EncounterGenerator encounterGenerator, Publisher publisher)
+    public Func<DateTimeOffset, IEnumerable<ActiveTiles.ActiveTile>>? GetActiveTiles { get; set; }
+
+    public Spawner(EventBusClient eventBus, TappableGenerator tappableGenerator, EncounterGenerator encounterGenerator, ILogger<Spawner> logger)
     {
-        _activeTiles = activeTiles;
-
+        _eventBus = eventBus;
         _tappableGenerator = tappableGenerator;
         _encounterGenerator = encounterGenerator;
-        _publisher = publisher;
+        _logger = logger;
 
-        _maxTappableLifetimeIntervals = (int)(long.Max(TappableGenerator.GetMaxTappableLifetime(), _encounterGenerator.GetMaxEncounterLifetime()) / SPAWN_INTERVAL + 1);
+        _maxTappableLifetimeIntervals = (int)(long.Max((long)_tappableGenerator.GetMaxTappableLifetime().TotalMilliseconds, (long)_encounterGenerator.GetMaxEncounterLifetime().TotalMilliseconds) / (long)SPAWN_INTERVAL.TotalMilliseconds + 1);
 
-        _spawnCycleTime = U.CurrentTimeMillis();
+        _spawnCycleTime = DateTimeOffset.UtcNow;
         _spawnCycleIndex = _maxTappableLifetimeIntervals;
     }
 
-    public static async Task<Spawner> CreateAsync(EventBusClient eventBusClient, ActiveTiles activeTiles, TappableGenerator tappableGenerator, EncounterGenerator encounterGenerator)
+    public async Task StartAsync(CancellationToken cancellationToken)
     {
-        var publisher = await eventBusClient.AddPublisherAsync();
-
-        return new Spawner(activeTiles, tappableGenerator, encounterGenerator, publisher);
-    }
-
-    public async Task Run()
-    {
-        long nextTime = U.CurrentTimeMillis() + SPAWN_INTERVAL;
-        while (true)
+        if (_publisher is null)
         {
+            _publisher = await _eventBus.AddPublisherAsync();
+        }
+
+        if (_task is not null)
+        {
+            _cts.Cancel();
+
+            while (_task is not null)
+            {
+                await Task.Delay(1, cancellationToken);
+            }
+
+            _cts = new CancellationTokenSource();
+        }
+
+#pragma warning disable CA2016 // Forward the 'CancellationToken' parameter to methods
+        _task = Task.Run(async () =>
+        {
+            var cancellationToken = _cts.Token;
+
+            var nextTime = DateTimeOffset.UtcNow + SPAWN_INTERVAL;
+
             try
             {
-                Thread.Sleep(Math.Max(0, (int)(nextTime - U.CurrentTimeMillis())));
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    await Task.Delay(int.Max(0, (int)(nextTime - DateTimeOffset.UtcNow).TotalMilliseconds), cancellationToken);
+
+                    nextTime += SPAWN_INTERVAL;
+
+                    await DoSpawnCycleAsync(cancellationToken);
+                }
             }
-            catch (ThreadInterruptedException)
+            finally
             {
-                Log.Information("Spawn thread was interrupted, exiting");
-                break;
+                _task = null;
+            }
+        });
+#pragma warning restore CA2016 // Forward the 'CancellationToken' parameter to methods
+    }
+
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        if (_task is not null)
+        {
+            _cts.Cancel();
+
+            while (_task is not null)
+            {
+                await Task.Delay(1, cancellationToken);
             }
 
-            nextTime += SPAWN_INTERVAL;
-
-            await DoSpawnCycle();
+            _cts = new CancellationTokenSource();
         }
     }
 
-    [Obsolete($"Use {nameof(SpawnTiles)} instead.")]
-    public async Task SpawnTile(int tileX, int tileY)
+    public void SpawnTilesSync(IEnumerable<ActiveTiles.ActiveTile> activeTiles)
     {
-        long spawnCycleTime = _spawnCycleTime;
-        int spawnCycleIndex = _spawnCycleIndex;
+        var spawnCycleTime = _spawnCycleTime;
+        var spawnCycleIndex = _spawnCycleIndex;
 
-        while (spawnCycleTime < U.CurrentTimeMillis())
-        {
-            spawnCycleTime += SPAWN_INTERVAL;
-            spawnCycleIndex++;
-        }
-
-        List<Tappable> tappables = [];
-
-        List<Encounter> encounters = [];
-        DoSpawnCyclesForTile(tileX, tileY, spawnCycleTime, spawnCycleIndex, tappables, encounters);
-
-        long tappableCutoffTime = spawnCycleTime - SPAWN_INTERVAL;
-        tappables.RemoveAll(tappable => tappable.SpawnTime + tappable.ValidFor < tappableCutoffTime);
-        encounters.RemoveAll(encounter => encounter.SpawnTime + encounter.ValidFor < tappableCutoffTime);
-
-        await SendSpawnedTappables(tappables, encounters);
-    }
-
-    public async Task SpawnTiles(IEnumerable<ActiveTiles.ActiveTile> activeTiles)
-    {
-        long spawnCycleTime = _spawnCycleTime;
-        int spawnCycleIndex = _spawnCycleIndex;
-
-        while (spawnCycleTime < U.CurrentTimeMillis())
+        while (spawnCycleTime < DateTimeOffset.UtcNow)
         {
             spawnCycleTime += SPAWN_INTERVAL;
             spawnCycleIndex++;
@@ -104,18 +123,72 @@ public class Spawner
             DoSpawnCyclesForTile(activeTile.TileX, activeTile.TileY, spawnCycleTime, spawnCycleIndex, tappables, encounters);
         }
 
-        long tappableCutoffTime = spawnCycleTime - SPAWN_INTERVAL;
+        var tappableCutoffTime = spawnCycleTime - SPAWN_INTERVAL;
         tappables.RemoveAll(tappable => tappable.SpawnTime + tappable.ValidFor < tappableCutoffTime);
         encounters.RemoveAll(encounter => encounter.SpawnTime + encounter.ValidFor < tappableCutoffTime);
 
-        await SendSpawnedTappables(tappables, encounters);
+        Prune(spawnCycleTime);
     }
 
-    private async Task DoSpawnCycle()
+    public (List<Tappable> Tappables, List<Encounter> Encounters) GetActiveLocationsForTiles(IEnumerable<(int X, int Y)> tiles, DateTimeOffset currentTime)
     {
-        var activeTiles = _activeTiles.GetActiveTiles(_spawnCycleTime);
+        List<Tappable> tappables = [];
+        List<Encounter> encounters = [];
 
-        while (_spawnCycleTime < U.CurrentTimeMillis())
+        foreach (var (X, Y) in tiles)
+        {
+            if (_tappables.TryGetValue(TileUtils.XYToInt(X, Y), out var tileTappables))
+            {
+                foreach (var tappable in tileTappables.Values)
+                {
+                    if (tappable.SpawnTime + tappable.ValidFor > currentTime)
+                    {
+                        tappables.Add(tappable);
+                    }
+                }
+            }
+
+            if (_encounters.TryGetValue(TileUtils.XYToInt(X, Y), out var tileEncounters))
+            {
+                foreach (var encounter in tileEncounters.Values)
+                {
+                    if (encounter.SpawnTime + encounter.ValidFor > currentTime)
+                    {
+                        encounters.Add(encounter);
+                    }
+                }
+            }
+        }
+
+        return (tappables, encounters);
+    }
+
+    public Task RemoveInactiveTilesAsync(IEnumerable<ActiveTiles.ActiveTile> inactiveTiles)
+    {
+        foreach (var activeTile in inactiveTiles)
+        {
+            var key = TileUtils.XYToInt(activeTile.TileX, activeTile.TileY);
+            _lastSpawnCycleForTile.TryRemove(key, out _);
+            _tappables.TryRemove(key, out _);
+            _encounters.TryRemove(key, out _);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_publisher is not null)
+        {
+            await _publisher.DisposeAsync();
+        }
+    }
+
+    private async Task DoSpawnCycleAsync(CancellationToken cancellationToken = default)
+    {
+        var activeTiles = GetActiveTiles?.Invoke(_spawnCycleTime) ?? [];
+
+        while (_spawnCycleTime < DateTimeOffset.UtcNow)
         {
             _spawnCycleTime += SPAWN_INTERVAL;
             _spawnCycleIndex++;
@@ -123,47 +196,106 @@ public class Spawner
 
         List<Tappable> tappables = [];
         List<Encounter> encounters = [];
-        foreach (ActiveTiles.ActiveTile activeTile in activeTiles)
+        foreach (var activeTile in activeTiles)
         {
             DoSpawnCyclesForTile(activeTile.TileX, activeTile.TileY, _spawnCycleTime, _spawnCycleIndex, tappables, encounters);
         }
 
-        long tappableCutoffTime = _spawnCycleTime - SPAWN_INTERVAL;
+        var tappableCutoffTime = _spawnCycleTime - SPAWN_INTERVAL;
 
         tappables.RemoveAll(tappable => tappable.SpawnTime + tappable.ValidFor < tappableCutoffTime);
         encounters.RemoveAll(encounter => encounter.SpawnTime + encounter.ValidFor < tappableCutoffTime);
 
-        await SendSpawnedTappables(tappables, encounters);
+        Prune(_spawnCycleTime);
+
+        await SendSpawnedTappablesAsync(tappables, encounters, cancellationToken);
     }
 
-    private void DoSpawnCyclesForTile(int tileX, int tileY, long spawnCycleTime, int spawnCycleIndex, List<Tappable> tappables, List<Encounter> encounters)
+    private void DoSpawnCyclesForTile(int tileX, int tileY, DateTimeOffset spawnCycleTime, int spawnCycleIndex, List<Tappable> tappables, List<Encounter> encounters)
     {
-        int lastSpawnCycle = _lastSpawnCycleForTile.GetValueOrDefault((tileX << 16) + tileY);
-        int cyclesToSpawn = Math.Min(spawnCycleIndex - lastSpawnCycle, _maxTappableLifetimeIntervals);
-        for (int index = 0; index < cyclesToSpawn; index++)
+        var key = TileUtils.XYToInt(tileX, tileY);
+        var lastSpawnCycle = _lastSpawnCycleForTile.GetValueOrDefault(key);
+        var isNewTile = lastSpawnCycle == 0;
+        var cyclesToSpawn = int.Min(spawnCycleIndex - lastSpawnCycle, _maxTappableLifetimeIntervals);
+        for (var index = 0; index < cyclesToSpawn; index++)
         {
-            SpawnTappablesForTile(tileX, tileY, spawnCycleTime - SPAWN_INTERVAL * (cyclesToSpawn - index - 1), tappables, encounters);
+            var isLastCycle = index == cyclesToSpawn - 1;
+            if (isNewTile && isLastCycle)
+            {
+                SpawnTappablesForTile(tileX, tileY, DateTimeOffset.UtcNow, tappables, encounters, immediateSpawn: true);
+            }
+            else
+            {
+                SpawnTappablesForTile(tileX, tileY, spawnCycleTime - SPAWN_INTERVAL * (cyclesToSpawn - index - 1), tappables, encounters);
+            }
         }
 
-        _lastSpawnCycleForTile[(tileX << 16) + tileY] = spawnCycleIndex;
+        _lastSpawnCycleForTile[key] = spawnCycleIndex;
     }
 
-    private void SpawnTappablesForTile(int tileX, int tileY, long currentTime, List<Tappable> tappables, List<Encounter> encounters)
+    private void SpawnTappablesForTile(int tileX, int tileY, DateTimeOffset currentTime, List<Tappable> tappables, List<Encounter> encounters, bool immediateSpawn = false)
     {
-        tappables.AddRange(_tappableGenerator.GenerateTappables(tileX, tileY, currentTime));
-        encounters.AddRange(_encounterGenerator.GenerateEncounters(tileX, tileY, currentTime));
-    }
-
-    private async Task SendSpawnedTappables(List<Tappable> tappables, List<Encounter> encounters)
-    {
-        if (!await _publisher.PublishAsync("tappables", "tappableSpawn", Json.Serialize(tappables)))
+        var tileKey = TileUtils.XYToInt(tileX, tileY);
+        var spawnedTappables = _tappableGenerator.GenerateTappables(tileX, tileY, currentTime, immediateSpawn);
+        foreach (var tappable in spawnedTappables)
         {
-            Log.Error("Event bus server rejected tappable spawn event");
+            _tappables.GetOrAdd(tileKey, static _ => [])[tappable.Id] = tappable;
+            tappables.Add(tappable);
         }
 
-        if (!await _publisher.PublishAsync("tappables", "encounterSpawn", Json.Serialize(encounters)))
+        var spawnedEncounters = _encounterGenerator.GenerateEncounters(tileX, tileY, currentTime, immediateSpawn);
+        foreach (var encounter in spawnedEncounters)
         {
-            Log.Error("Event bus server rejected encounter spawn event");
+            _encounters.GetOrAdd(tileKey, static _ => [])[encounter.Id] = encounter;
+            encounters.Add(encounter);
         }
     }
+
+    private void Prune(DateTimeOffset currentTime)
+    {
+        foreach (var tileTappables in _tappables.Values)
+        {
+            tileTappables.RemoveAll(entry =>
+            {
+                var tappable = entry.Value;
+                var expiresAt = tappable.SpawnTime + tappable.ValidFor;
+                return expiresAt + GRACE_PERIOD <= currentTime;
+            });
+        }
+
+        _tappables.RemoveAll(entry => entry.Value.IsEmpty);
+
+        foreach (var tileEncounters in _encounters.Values)
+        {
+            tileEncounters.RemoveAll(entry =>
+            {
+                var encounter = entry.Value;
+                var expiresAt = encounter.SpawnTime + encounter.ValidFor;
+                return expiresAt + GRACE_PERIOD <= currentTime;
+            });
+        }
+
+        _encounters.RemoveAll(entry => entry.Value.IsEmpty);
+    }
+
+    private async Task SendSpawnedTappablesAsync(List<Tappable> tappables, List<Encounter> encounters, CancellationToken cancellationToken = default)
+    {
+        Debug.Assert(_publisher is not null);
+
+        if (!await _publisher.PublishAsync("tappables", "tappableSpawn", JsonSerializer.Serialize(tappables, AppJsonContext.Default.ListTappable), cancellationToken))
+        {
+            LogEventBusServerRejectedTappableSpawnEvent();
+        }
+
+        if (!await _publisher.PublishAsync("tappables", "encounterSpawn", JsonSerializer.Serialize(encounters, AppJsonContext.Default.ListEncounter), cancellationToken))
+        {
+            LogEventBusServerRejectedEncounterSpawnEvent();
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Event bus server rejected tappable spawn event")]
+    private partial void LogEventBusServerRejectedTappableSpawnEvent();
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Event bus server rejected encounter spawn event")]
+    private partial void LogEventBusServerRejectedEncounterSpawnEvent();
 }

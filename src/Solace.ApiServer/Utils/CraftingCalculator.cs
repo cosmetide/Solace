@@ -1,19 +1,18 @@
 ﻿using System.Diagnostics;
-using Solace.Common.Utils;
-using Solace.DB.Models.Player.Workshop;
+using Solace.Db.Earth.Models.Player.Workshop;
 using Solace.StaticData;
 
 namespace Solace.ApiServer.Utils;
 
-public static class CraftingCalculator
+internal static class CraftingCalculator
 {
-    public static State CalculateState(long currentTime, CraftingSlotEF.ActiveJobR activeJob, Catalog catalog)
+    public static State CalculateState(DateTimeOffset currentTime, CraftingSlotEF.ActiveCraftingJob activeJob, Catalog catalog)
     {
-        Catalog.RecipesCatalogR.CraftingRecipe recipe = catalog.RecipesCatalog.Crafting.Where(craftingRecipe => craftingRecipe.Id == activeJob.RecipeId).First();
+        var recipe = catalog.RecipesCatalog.Crafting.Where(craftingRecipe => craftingRecipe.Id == activeJob.RecipeId).First();
 
-        long roundDuration = recipe.Duration * 1000;
-        int completedRounds = activeJob.FinishedEarly ? activeJob.TotalRounds : int.Min((int)((currentTime - activeJob.StartTime) / roundDuration), activeJob.TotalRounds);
-        int availableRounds = completedRounds - activeJob.CollectedRounds;
+        var roundDuration = TimeSpan.FromSeconds(recipe.Duration);
+        var completedRounds = activeJob.FinishedEarly ? activeJob.TotalRounds : int.Min((int)((currentTime - activeJob.StartTime) / roundDuration), activeJob.TotalRounds);
+        var availableRounds = completedRounds - activeJob.CollectedRounds;
 
         LinkedList<InputItem> input = [];
         if (activeJob.Input.Length != recipe.Ingredients.Length)
@@ -21,11 +20,11 @@ public static class CraftingCalculator
             throw new InvalidOperationException();
         }
 
-        for (int index = 0; index < recipe.Ingredients.Length; index++)
+        for (var index = 0; index < recipe.Ingredients.Length; index++)
         {
-            int usedCount = recipe.Ingredients[index].Count * completedRounds;
-            InputItem[] inputItems = activeJob.Input[index].Items;
-            foreach (InputItem inputItem in inputItems)
+            var usedCount = recipe.Ingredients[index].Count * completedRounds;
+            var inputItems = activeJob.Input[index].Items;
+            foreach (var inputItem in inputItems)
             {
                 if (usedCount == 0)
                 {
@@ -68,52 +67,52 @@ public static class CraftingCalculator
         );
     }
 
-    public sealed record State(
+    internal sealed record State(
         int CompletedRounds,
         int AvailableRounds,
         int TotalRounds,
         InputItem[] Input,
         State.OutputItem Output,
-        long NextCompletionTime,
-        long TotalCompletionTime,
+        DateTimeOffset NextCompletionTime,
+        DateTimeOffset TotalCompletionTime,
         bool Completed
     )
     {
-        public sealed record OutputItem(
-            string Id,
+        internal sealed record OutputItem(
+            Guid Id,
             int Count
         );
     }
 
     // TODO: make this configurable
-    public static FinishPrice CalculateFinishPrice(int remainingTime)
+    public static FinishPrice CalculateFinishPrice(TimeSpan remainingTime)
     {
-        if (remainingTime < 0)
+        if (remainingTime < TimeSpan.Zero)
         {
             throw new ArgumentException($"{nameof(remainingTime)} is negative.", nameof(remainingTime));
         }
 
-        int periods = remainingTime / 10000;
-        if (remainingTime % 10000 > 0)
+        var periods = (int)remainingTime.TotalSeconds / 10;
+        if ((int)remainingTime.TotalSeconds % 10 > 0)
         {
             periods = periods + 1;
         }
 
-        int price = periods * 5;
-        int changesAt = (periods - 1) * 10000;
-        int validFor = remainingTime - changesAt;
+        var price = periods * 5;
+        var changesAt = TimeSpan.FromMilliseconds((periods - 1) * 10000);
+        var validFor = remainingTime - changesAt;
 
         return new FinishPrice(price, validFor);
     }
 
-    public sealed record FinishPrice(
+    internal sealed record FinishPrice(
         int Price,
-        int ValidFor
+        TimeSpan ValidFor
     );
 
     // TODO: make this configurable
     public static int CalculateUnlockPrice(int slotIndex)
-        => slotIndex < 1 || slotIndex > 3
+        => slotIndex is < 1 or > 3
         ? throw new ArgumentOutOfRangeException(nameof(slotIndex))
         : slotIndex * 5;
 }

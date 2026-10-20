@@ -1,0 +1,117 @@
+﻿using Asp.Versioning;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.Mvc;
+using Solace.ApiServer.Utils;
+using Solace.Db.Earth;
+using Microsoft.EntityFrameworkCore;
+using Solace.StaticData;
+
+namespace Solace.ApiServer.Controllers;
+
+[Authorize]
+[ApiVersion("1.1")]
+[Route("1/api/v{version:apiVersion}/player")]
+internal sealed class ProfileController : SolaceControllerBase
+{
+    private readonly EarthDbContext _earthDb;
+    private readonly StaticDataProvider _staticData;
+
+    public ProfileController(EarthDbContext earthDB, StaticDataProvider staticData)
+    {
+        _earthDb = earthDB;
+        _staticData = staticData;
+    }
+
+    [HttpGet("profile/{userId}")]
+    public async Task<Results<Ok<EarthApiResponse<Types.Profile.ProfileResponse>>, BadRequest>> GetProfile(string userId, CancellationToken cancellationToken)
+    {
+        // TODO: decide if we should allow requests for profiles of other players
+        if (!Guid.TryParse(userId, out var accountId))
+        {
+            return TypedResults.BadRequest();
+        }
+
+        // request.timestamp
+        var requestStartedOn = HttpContext.GetTimestamp();
+
+        var profile = await _earthDb.Profiles
+            .AsNoTracking()
+            .Where(profile => profile.Id == accountId)
+            .Select(profile => new { profile.Level, profile.Experience, profile.Health })
+            .FirstAsync(cancellationToken: cancellationToken);
+
+        var boosts = await _earthDb.Boosts
+            .AsNoTracking()
+            .FirstAsync(boosts => boosts.Id == accountId, cancellationToken: cancellationToken);
+
+        var levels = _staticData.Levels.Levels;
+        var currentLevelExperience = profile.Experience - (profile.Level > 1 ? profile.Level - 2 < levels.Length ? levels[profile.Level - 2].ExperienceRequired : levels[^1].ExperienceRequired : 0);
+        var experienceRemaining = profile.Level - 1 < levels.Length ? levels[profile.Level - 1].ExperienceRequired - profile.Experience : 0;
+
+        var maxPlayerHealth = Common.Utils.BoostUtils.GetMaxPlayerHealth(boosts, requestStartedOn, _staticData.Catalog);
+        if (profile.Health > maxPlayerHealth)
+        {
+            await _earthDb.Profiles
+                .Where(profile => profile.Id == accountId)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(profile => profile.Health, maxPlayerHealth), cancellationToken);
+        }
+
+        return TypedResults.Ok(new EarthApiResponse<Types.Profile.ProfileResponse>(new(
+            Enumerable.Range(0, levels.Length).Select(levelIndex =>
+            {
+                var level = levels[levelIndex];
+                return new KeyValuePair<int, Types.Profile.ProfileResponse.LevelR>(levelIndex + 1, new(level.ExperienceRequired, LevelUtils.MakeLevelRewards(level).ToApiResponse()));
+            }).ToDictionary(),
+            profile.Experience,
+            profile.Level,
+            currentLevelExperience,
+            experienceRemaining,
+            profile.Health,
+            profile.Health / (float)maxPlayerHealth * 100.0f
+        )));
+    }
+
+    [ResponseCache(Duration = 11200)]
+    [HttpGet("rubies")]
+    public async Task<Results<Ok<EarthApiResponse<int>>, BadRequest>> GetRubies(CancellationToken cancellationToken)
+    {
+        if (!TryGetProfileId(out var accountId))
+        {
+            return TypedResults.BadRequest();
+        }
+
+        var rubies = await _earthDb.Profiles
+            .AsNoTracking()
+            .Where(profile => profile.Id == accountId)
+            .Select(profile => new { profile.Rubies.Purchased, profile.Rubies.Earned, })
+            .FirstAsync(cancellationToken: cancellationToken);
+
+        return TypedResults.Ok(new EarthApiResponse<int>(rubies.Purchased + rubies.Earned));
+    }
+
+    [ResponseCache(Duration = 11200)]
+    [HttpGet("splitRubies")]
+    public async Task<Results<Ok<EarthApiResponse<Types.Profile.SplitRubies>>, BadRequest>> GetSplitRubies(CancellationToken cancellationToken)
+    {
+        if (!TryGetProfileId(out var accountId))
+        {
+            return TypedResults.BadRequest();
+        }
+
+        var rubies = await _earthDb.Profiles
+            .AsNoTracking()
+            .Where(profile => profile.Id == accountId)
+            .Select(profile => new { profile.Rubies.Purchased, profile.Rubies.Earned, })
+            .FirstAsync(cancellationToken: cancellationToken);
+
+        return TypedResults.Ok(new EarthApiResponse<Types.Profile.SplitRubies>(new(rubies.Purchased, rubies.Earned)));
+    }
+
+    // todo: does the client retreive the language somewhere? if so, we should store it in ProfileEF
+    // required for the language selection option in the client to work
+    [HttpPost("profile/language")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "Endpoints cannot be static")]
+    public Ok ChangeLanguage()
+        => TypedResults.Ok();
+}

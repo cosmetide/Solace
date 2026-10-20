@@ -1,46 +1,57 @@
-﻿using Serilog;
+﻿using System.Text.Json;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using SkiaSharp;
-using Solace.Common;
 using Solace.EventBus.Client;
 
 namespace Solace.TileRenderer;
 
-internal sealed class EventBusTileRenderer : IAsyncDisposable
+internal sealed partial class EventBusTileRenderer : IHostedService, IAsyncDisposable
 {
     private readonly ITileDataSource _dataSource;
     private readonly EventBusClient _eventBus;
-    private readonly TileRenderer _renderer;
+    private readonly VectorTileRenderer _renderer;
+    private RequestHandler? _handler;
 
-    public EventBusTileRenderer(ITileDataSource dataSource, EventBusClient eventBus, StaticData.StaticData staticData)
+    private readonly ILogger<EventBusTileRenderer> _logger;
+
+    public EventBusTileRenderer(ITileDataSource dataSource, EventBusClient eventBus, StaticData.StaticDataProvider staticData, ILogger<EventBusTileRenderer> logger)
     {
         _dataSource = dataSource;
         _eventBus = eventBus;
-        _renderer = TileRenderer.Create(dataSource.GetTagMapJson(staticData.TileRenderer), Log.Logger);
+        _renderer = VectorTileRenderer.Create(dataSource.GetTagMapJson(staticData.TileRenderer), logger);
+        _logger = logger;
     }
 
-    public async Task RunAsync()
+    public async Task StartAsync(CancellationToken cancellationToken)
     {
-        await _eventBus.AddRequestHandlerAsync("tile", new RequestHandlerLister(async request =>
+        if (_handler is not null)
         {
-            if (request.Type == "renderTile")
+            return;
+        }
+
+        _handler = await _eventBus.AddRequestHandlerAsync("tile",
+        async (request, cancellationToken) =>
+        {
+            if (request.Type is "renderTile")
             {
                 RenderTileRequest getTile;
                 try
                 {
-                    getTile = Json.Deserialize<RenderTileRequest>(request.Data)!;
+                    getTile = JsonSerializer.Deserialize((string)request.Data.Value!, AppJsonContext.Default.RenderTileRequest)!;
                 }
-                catch (Exception ex)
+                catch (Exception exception)
                 {
-                    Log.Error($"Could not deserialise renderTile request: {ex}");
+                    LogCouldNotDeserialiseRenderTileRequest(exception);
                     return null;
                 }
 
-                Log.Information($"Rendering tile ({getTile.TileX}, {getTile.TileY}, {getTile.Zoom})");
+                LogRenderingTile(getTile.TileX, getTile.TileX, getTile.Zoom);
 
                 using (var bitmap = new SKBitmap(128, 128))
                 using (var canvas = new SKCanvas(bitmap))
                 {
-                    await _renderer.RenderAsync(_dataSource, canvas, getTile.TileX, getTile.TileY, getTile.Zoom, Log.Logger);
+                    await _renderer.RenderAsync(_dataSource, canvas, getTile.TileX, getTile.TileY, getTile.Zoom, _logger, cancellationToken);
 
                     // TODO: higher/lower quality?
                     using (var data = bitmap.Encode(SKEncodedImageFormat.Png, 80))
@@ -48,7 +59,7 @@ internal sealed class EventBusTileRenderer : IAsyncDisposable
                     {
                         data.SaveTo(stream);
 
-                        Log.Information("Sending rendered tile");
+                        LogSendingRenderedTile();
                         return Convert.ToBase64String(stream.ToArray());
                     }
                 }
@@ -57,22 +68,46 @@ internal sealed class EventBusTileRenderer : IAsyncDisposable
             {
                 return null;
             }
-        }, async () =>
+        }, async exception =>
         {
-            Log.Error("Event bus subscriber error");
+            LogEventBusSubscriberError(exception);
+            Console.Error.WriteLine(exception);
+            Console.Error.Flush();
             await DisposeAsync();
-            Log.CloseAndFlush();
             Environment.Exit(1);
-        }));
+        });
 
-        Log.Information("Started");
+        LogStarted();
+    }
 
-        while (true)
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        if (_handler is not null)
         {
-            await Task.Delay(1000);
+            await _handler.DisposeAsync();
         }
     }
 
     public async ValueTask DisposeAsync()
-        => await _eventBus.DisposeAsync();
+    {
+        if (_handler is not null)
+        {
+            await _handler.DisposeAsync();
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Could not deserialise renderTile request")]
+    private partial void LogCouldNotDeserialiseRenderTileRequest(Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Rendering tile ({PosX}, {PosY}, {Zoom})")]
+    private partial void LogRenderingTile(int PosX, int PosY, int Zoom);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Sending rendered tile")]
+    private partial void LogSendingRenderedTile();
+
+    [LoggerMessage(Level = LogLevel.Critical, Message = "Event bus subscriber error")]
+    private partial void LogEventBusSubscriberError(Exception? exception);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Started")]
+    private partial void LogStarted();
 }

@@ -7,9 +7,13 @@
 test/
 
 build/
+publish/
 
+/data/*
 /src/*/data/*
 /src/*/staticdata/*
+
+/src/Solace.AppHost/aspire-output/*
 
 .vscode/
 

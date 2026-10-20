@@ -1,6 +1,6 @@
 ﻿namespace Solace.ApiServer.Types.Common;
 
-public sealed record BurnRate(
+internal sealed record BurnRate(
     int BurnTime,
     int HeatPerSecond
 );

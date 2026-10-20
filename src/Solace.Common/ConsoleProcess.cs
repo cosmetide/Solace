@@ -1,18 +1,18 @@
-﻿//#define KEEP_WINDOW_OPEN
+﻿// #define KEEP_WINDOW_OPEN
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
-using System.Runtime.InteropServices;
-using Serilog;
+using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging;
 using Solace.Common.Utils;
 
 namespace Solace.Common;
 
 // from https://stackoverflow.com/a/50311340/15878562
-public sealed class ConsoleProcess : IDisposable
+public sealed partial class ConsoleProcess : IDisposable
 {
     private readonly string _filePath;
-    public readonly Process Process = new Process();
+    public readonly Process Process = new();
 
     public bool IORedirected { get; private set; }
     public bool OpenInNewWindow { get; private set; }
@@ -54,10 +54,12 @@ public sealed class ConsoleProcess : IDisposable
     private int? _actualAppPid;
     private Process? _cachedActualProcess;
 
+    private readonly ILogger _logger;
+
     private static string? _cachedLinuxTerminal;
     private static string? _cachedLinuxTerminalExecArg;
     private static bool _linuxTerminalDiscoveryAttempted;
-    private static readonly Lock _terminalCacheLock = new Lock();
+    private static readonly Lock _terminalCacheLock = new();
 
     private static readonly (string Name, string ExecutionArg)[] _linuxTerminalsToCheck =
     [
@@ -96,7 +98,10 @@ public sealed class ConsoleProcess : IDisposable
         }
     }
 
-    public ConsoleProcess(string appName, bool useShellExecute, bool redirect, bool openInNewWindow = false)
+    [SupportedOSPlatform("android")]
+    [SupportedOSPlatform("linux")]
+    [SupportedOSPlatform("windows")]
+    public ConsoleProcess(string appName, ILogger logger, bool useShellExecute, bool redirect, bool openInNewWindow = false)
     {
         if (openInNewWindow && redirect)
         {
@@ -108,14 +113,16 @@ public sealed class ConsoleProcess : IDisposable
             throw new InvalidOperationException("Can't redirect std in/out when useShellExecute is true");
         }
 
+        _logger = logger;
+
         if (OperatingSystem.IsLinux() && openInNewWindow)
         {
-            bool hasDisplay = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DISPLAY")) ||
+            var hasDisplay = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DISPLAY")) ||
                 !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY"));
 
             if (!hasDisplay || !IsLinuxTerminalAvailable())
             {
-                Log.Debug("No terminal emulator is available, launching without a new window");
+                LogNotTerminalEmulatorAvailableNoNewWindow();
                 openInNewWindow = false;
             }
         }
@@ -131,6 +138,7 @@ public sealed class ConsoleProcess : IDisposable
             RedirectStandardOutput = redirect,
             UseShellExecute = useShellExecute,
             CreateNoWindow = !useShellExecute && !openInNewWindow,
+            KillOnParentExit = true,
         };
 
         Process.EnableRaisingEvents = true;
@@ -138,6 +146,9 @@ public sealed class ConsoleProcess : IDisposable
         Process.Exited += ProcessOnExited;
     }
 
+    [SupportedOSPlatform("android")]
+    [SupportedOSPlatform("linux")]
+    [SupportedOSPlatform("windows")]
     public async Task ExecuteAsync(string? workingDir, params string[] args)
     {
         if (running)
@@ -153,9 +164,10 @@ public sealed class ConsoleProcess : IDisposable
         if (OpenInNewWindow)
         {
 #if KEEP_WINDOW_OPEN
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            if (OperatingSystem.IsWindows())
             {
                 Process.StartInfo.UseShellExecute = true;
+                Process.StartInfo.KillOnParentExit = false;
                 Process.StartInfo.FileName = "cmd.exe";
                 Process.StartInfo.Arguments = $"/k \"\"{_filePath}\" {FormatStandardArguments(args)}\"";
             }
@@ -164,7 +176,7 @@ public sealed class ConsoleProcess : IDisposable
                 ApplyTerminalWrapper(args);
             }
 #else
-            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            if (!OperatingSystem.IsWindows())
             {
                 ApplyTerminalWrapper(args);
             }
@@ -222,9 +234,9 @@ public sealed class ConsoleProcess : IDisposable
                 return "\"\"";
             }
 
-            if (a.Contains(' ') || a.Contains('{') || a.Contains('"'))
+            if (a.Contains(' ', StringComparison.Ordinal) || a.Contains('{', StringComparison.Ordinal) || a.Contains('"', StringComparison.Ordinal))
             {
-                return $"\"{a.Replace("\"", "\\\"")}\"";
+                return $"\"{a.Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
             }
 
             return a;
@@ -242,17 +254,21 @@ public sealed class ConsoleProcess : IDisposable
     public async Task WaitForExitAsync(CancellationToken cancellationToken = default)
         => await ActualProcess.WaitForExitAsync(cancellationToken);
 
-    public async Task StopNoWaitAsync(int timeout = 15 * 1000, CancellationToken cancellationToken = default)
-        => await ActualProcess.StopGracefullyOrKillAsync(timeout, cancellationToken);
+    public async Task StopNoWaitAsync(ILogger logger, int timeout = 15 * 1000, CancellationToken cancellationToken = default)
+        => await ActualProcess.StopGracefullyOrKillAsync(TimeSpan.FromMilliseconds(timeout), logger, cancellationToken);
 
-    public async Task StopAndWaitAsync(int timeout = 15 * 1000, CancellationToken cancellationToken = default)
-        => await ActualProcess.StopGracefullyOrKillAndWaitAsync(timeout, cancellationToken);
+    public async Task StopAndWaitAsync(ILogger logger, int timeout = 15 * 1000, CancellationToken cancellationToken = default)
+        => await ActualProcess.StopGracefullyOrKillAndWaitAsync(TimeSpan.FromMilliseconds(timeout), logger, cancellationToken);
 
+    [SupportedOSPlatform("android")]
+    [SupportedOSPlatform("linux")]
+    [SupportedOSPlatform("windows")]
     private void ApplyTerminalWrapper(IEnumerable<string> args)
     {
         Process.StartInfo.UseShellExecute = true;
+        Process.StartInfo.KillOnParentExit = false;
 
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        if (OperatingSystem.IsLinux())
         {
             if (!IsLinuxTerminalAvailable())
             {
@@ -261,14 +277,14 @@ public sealed class ConsoleProcess : IDisposable
 
             Process.StartInfo.FileName = _cachedLinuxTerminal;
 
-            var linuxArgs = args.Select(a => $"'{a.Replace("'", "'\\''")}'");
+            var linuxArgs = args.Select(a => $"'{a.Replace("'", "'\\''", StringComparison.Ordinal)}'");
 
-            string innerCommand = $"'{_filePath.Replace("'", "'\\''")}' {string.Join(" ", linuxArgs)}";
+            var innerCommand = $"'{_filePath.Replace("'", "'\\''", StringComparison.Ordinal)}' {string.Join(" ", linuxArgs)}";
 
             innerCommand = innerCommand
-                .Replace("\\", "\\\\")
-                .Replace("$", "\\$")
-                .Replace("\"", "\\\"");
+                .Replace("\\", "\\\\", StringComparison.Ordinal)
+                .Replace("$", "\\$", StringComparison.Ordinal)
+                .Replace("\"", "\\\"", StringComparison.Ordinal);
 
             _pidFilePath = Path.GetTempFileName();
 
@@ -278,25 +294,20 @@ public sealed class ConsoleProcess : IDisposable
             Process.StartInfo.Arguments = $"{_cachedLinuxTerminalExecArg} bash -c \"echo $$ > '{_pidFilePath}'; exec {innerCommand}\"";
 #endif
         }
-        else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        else if (OperatingSystem.IsMacOS())
         {
             // todo: currently not tested
-            var osxArgs = args.Select(a => $"'{a.Replace("'", "'\\''")}'");
-            string innerCommand = $"'{_filePath.Replace("'", "'\\''")}' {string.Join(" ", osxArgs)}";
-
-            string escapedCommand = innerCommand.Replace("\\", "\\\\").Replace("\"", "\\\"");
+            var arguments = FormatStandardArguments(args);
+            var command = $"'{_filePath}' {arguments}";
 
 #if KEEP_WINDOW_OPEN
-            string appleScript = $"tell application \"Terminal\" to do script \"{escapedCommand}\"";
+            var appleScript = $"tell application \"Terminal\" to do script \"{command.Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
 #else
-            string appleScript = $"tell application \"Terminal\" to do script \"{escapedCommand}; exit\"";
+            var appleScript = $"tell application \"Terminal\" to do script \"{command.Replace("\"", "\\\"", StringComparison.Ordinal)}; exit\"";
 #endif
 
-            Process.StartInfo.UseShellExecute = false;
             Process.StartInfo.FileName = "osascript";
-            Process.StartInfo.Arguments = "";
-            Process.StartInfo.ArgumentList.Add("-e");
-            Process.StartInfo.ArgumentList.Add(appleScript);
+            Process.StartInfo.Arguments = $"-e \"{appleScript}\"";
         }
         else
         {
@@ -337,7 +348,8 @@ public sealed class ConsoleProcess : IDisposable
 
                     if (process.ExitCode == 0)
                     {
-                        Log.Information($"Using '{name}' to launch new terminal windows.");
+                        var logger = GlobalLoggerFactory.CreateLogger<ConsoleProcess>();
+                        LogUsingTerminalEmulator(logger, name);
                         _cachedLinuxTerminal = name;
                         _cachedLinuxTerminalExecArg = executionArg;
                         return true;
@@ -352,7 +364,7 @@ public sealed class ConsoleProcess : IDisposable
         }
     }
 
-    private static async Task<int?> ResolveActualPidAsync(string pidFile, int timeout = 5000)
+    private async Task<int?> ResolveActualPidAsync(string pidFile, int timeout = 5000)
     {
         using var cts = new CancellationTokenSource(timeout);
 
@@ -365,7 +377,7 @@ public sealed class ConsoleProcess : IDisposable
                     if (File.Exists(pidFile))
                     {
                         var content = await File.ReadAllTextAsync(pidFile, cts.Token);
-                        if (int.TryParse(content.Trim(), out int pid))
+                        if (int.TryParse(content.Trim(), CultureInfo.InvariantCulture, out var pid))
                         {
                             File.Delete(pidFile);
                             return pid;
@@ -381,7 +393,7 @@ public sealed class ConsoleProcess : IDisposable
         }
         catch (OperationCanceledException)
         {
-            Log.Warning("Timed out waiting for terminal emulator to report its PID.");
+            LogTerminalEmulatorStartTimeout();
         }
         finally
         {
@@ -399,4 +411,13 @@ public sealed class ConsoleProcess : IDisposable
         Process.Dispose();
         _cachedActualProcess?.Dispose();
     }
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "No terminal emulator is available, launching without a new window")]
+    private partial void LogNotTerminalEmulatorAvailableNoNewWindow();
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Using '{TerminalEmulatorName}' to launch new terminal windows")]
+    private static partial void LogUsingTerminalEmulator(ILogger logger, string TerminalEmulatorName);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Timed out waiting for terminal emulator to report its PID")]
+    private partial void LogTerminalEmulatorStartTimeout();
 }

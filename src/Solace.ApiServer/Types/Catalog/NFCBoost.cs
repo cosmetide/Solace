@@ -2,7 +2,7 @@
 
 namespace Solace.ApiServer.Types.Catalog;
 
-public sealed record NFCBoost(
+internal sealed record NFCBoost(
     string Id,
     string Name,
     string Type,

@@ -1,36 +1,41 @@
 ﻿using Microsoft.EntityFrameworkCore;
-using Solace.DB;
-using Solace.DB.Models.Player;
-using Solace.DB.Utils;
+using Solace.Common;
+using Solace.Db.Earth;
+using Solace.Db.Earth.Models.Player;
 using Solace.StaticData;
-using static Solace.DB.Models.Player.TokensEF;
 
 namespace Solace.ApiServer.Utils;
 
-public sealed class LevelUtils
+internal sealed partial class LevelUtils
 {
 #pragma warning disable IDE0060 // Remove unused parameter
-    public static async Task CheckAndHandlePlayerLevelUpAsync(EarthDbContext.Results results, Guid accountId, long currentTime, StaticData.StaticData staticData)
+    public static async Task CheckAndHandlePlayerLevelUpAsync(EarthDbContext earthDb, ResultsEF.Builder results, Guid accountId, DateTimeOffset currentTime, StaticData.StaticDataProvider staticData, CancellationToken cancellationToken = default)
 #pragma warning restore IDE0060 // Remove unused parameter
     {
-        var profile = await results.EarthDb.Profiles
-            .AsTracking()
-            .FirstOrNewAsync(profile => profile.Id == accountId);
+        var profile = await earthDb.Profiles
+            .AsNoTracking()
+            .Where(profile => profile.Id == accountId)
+            .Select(profile => new { profile.Level, profile.Experience, })
+            .FirstAsync(cancellationToken);
 
-        bool changed = false;
-        while (profile.Level - 1 < staticData.Levels.Levels.Length && profile.Experience >= staticData.Levels.Levels[profile.Level - 1].ExperienceRequired)
+        var profileLevel = profile.Level;
+
+        var changed = false;
+        while (profileLevel - 1 < staticData.Levels.Levels.Length && profile.Experience >= staticData.Levels.Levels[profileLevel - 1].ExperienceRequired)
         {
             changed = true;
-            profile.Level++;
-            Rewards rewards = MakeLevelRewards(staticData.Levels.Levels[profile.Level - 2]);
-            await TokenUtils.AddTokenAsync(results, accountId, new LevelUpToken(profile.Level, rewards.ToDBRewardsModel()));
+            profileLevel++;
+            var rewards = MakeLevelRewards(staticData.Levels.Levels[profileLevel - 2]);
+            await TokenUtils.AddTokenAsync(earthDb, results, new LevelUpTokenEF(accountId, profileLevel, rewards.ToDBRewardsModel()), cancellationToken);
         }
 
         if (changed)
         {
-            await results.EarthDb.SaveChangesAsync();
+            await earthDb.Profiles
+                .Where(profile => profile.Id == accountId)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(profile => profile.Level, profileLevel), cancellationToken);
 
-            results.Profile = profile.Version;
+            results.Profile();
         }
     }
 
@@ -47,11 +52,22 @@ public sealed class LevelUtils
             rewards.AddItem(item.Id, item.Count);
         }
 
-        foreach (string buildplate in level.Buildplates)
+        foreach (var buildplate in level.Buildplates)
         {
-            rewards.AddBuildplate(buildplate);
+            if (Guid.TryParse(buildplate, out var buildplateGuid))
+            {
+                rewards.AddBuildplate(buildplateGuid);
+            }
+            else
+            {
+                var logger = GlobalLoggerFactory.CreateLogger(nameof(LevelUtils));
+                LogCouldNotParseLevelUpBuildplateId(logger, buildplate);
+            }
         }
 
         return rewards;
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not parse level up buildplate id '{BuildplateId}'")]
+    private static partial void LogCouldNotParseLevelUpBuildplateId(ILogger logger, string BuildplateId);
 }

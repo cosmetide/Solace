@@ -1,0 +1,80 @@
+name: Termux Aspire Bundle
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Optional release tag to upload the bundle to
+        required: false
+        type: string
+  push:
+    tags:
+      - "termux-*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "11.0.x"
+          dotnet-quality: "preview"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Restore
+        run: dotnet restore src/Solace.AppHost/Solace.AppHost.csproj
+
+      - name: Build
+        run: dotnet build src/Solace.AppHost/Solace.AppHost.csproj --configuration Debug --no-restore
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          rm -rf package termux-aspire.zip termux-aspire.zip.sha256
+          mkdir -p package
+          for bin in src/*/bin; do
+            [ -d "$bin" ] || continue
+            project_dir="$(dirname "$bin")"
+            mkdir -p "package/$project_dir"
+            cp -a "$bin" "package/$project_dir/"
+          done
+          find package -type f -name '*.pdb' -delete
+          (cd package && zip -qr ../termux-aspire.zip .)
+          sha256sum termux-aspire.zip > termux-aspire.zip.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: termux-aspire
+          path: |
+            termux-aspire.zip
+            termux-aspire.zip.sha256
+          if-no-files-found: error
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/termux-') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" termux-aspire.zip termux-aspire.zip.sha256 --clobber
+          else
+            gh release create "$TAG" termux-aspire.zip termux-aspire.zip.sha256 \
+              --title "$TAG" \
+              --notes "Prebuilt Termux Aspire bundle"
+          fi

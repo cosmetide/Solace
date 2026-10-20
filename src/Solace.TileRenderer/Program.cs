@@ -1,192 +1,284 @@
-﻿using CommandLine;
 using Npgsql;
-using Serilog;
 using System.Diagnostics;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Solace.EventBus.Client;
 using Solace.StaticData;
-using System.Globalization;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Hosting;
+using Solace.Common;
+using Microsoft.Extensions.DependencyInjection;
+using System.Text;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+#if USE_SHARED_LIBS
+using System.Runtime.Loader;
+#endif
 
 namespace Solace.TileRenderer;
 
 internal static class Program
 {
-    private sealed class Options
+    private static Task<int> Main(string[] args)
     {
-        [Option("maptiler_key", HelpText = "Api key for maptiler.com", SetName = "Data source")]
-        public string? MapTilerApiKey { get; set; }
+#if USE_SHARED_LIBS
+        AssemblyLoadContext.Default.Resolving += (context, assemblyName) =>
+        {
+            string sharedDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "shared_libs"));
+            string assemblyPath = Path.Combine(sharedDir, $"{assemblyName.Name}.dll");
 
-        [Option("tileDB", HelpText = "Connection string to a postgresql database with tile data, for example 'Host=myserver;Username=mylogin;Password=mypass;Database=mydatabase'", SetName = "Data source")]
-        public string? TileDatabaseConnectionString { get; set; }
+            if (File.Exists(assemblyPath))
+            {
+                return context.LoadFromAssemblyPath(assemblyPath);
+            }
 
-        [Option("eventbus", Default = "localhost:5532", Required = false, HelpText = "Event bus address")]
-        public string? EventBusConnectionString { get; set; }
+            return null;
+        };
+#endif
 
-        [Option("dir", Default = "./staticdata", Required = false, HelpText = "Static data path")]
-        public string? StaticDataPath { get; set; }
-
-        [Option("logger-url", Default = null, Required = false, HelpText = "Url to send logs to")]
-        public string? LoggerUrl { get; set; }
+        return App.RunAsync(args);
     }
+}
 
-    private static async Task<int> Main(string[] args)
+#pragma warning disable MA0048 // File name must match type name
+internal static partial class App
+#pragma warning restore MA0048 // File name must match type name
+{
+    public static async Task<int> RunAsync(string[] args)
     {
         if (!Debugger.IsAttached)
         {
-            AppDomain.CurrentDomain.UnhandledException += (object sender, UnhandledExceptionEventArgs e) =>
+            AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
             {
-                Log.Fatal($"Unhandled exception: {e.ExceptionObject}");
-                Log.CloseAndFlush();
-                Environment.Exit(1);
+                Console.Error.WriteLine($"Unhandled exception: {e.ExceptionObject}");
+
+                try
+                {
+                    var logger = GlobalLoggerFactory.CreateLogger(nameof(App));
+                    LogUnhandledException(logger, e.ExceptionObject as Exception);
+                }
+                catch
+                {
+                    Console.Error.WriteLine($"Unhandled exception before logger initialization");
+                }
+
+                Console.Out.Flush();
+                Console.Error.Flush();
+
+                Environment.Exit(2);
             };
         }
 
-        ParserResult<Options> res = Parser.Default.ParseArguments<Options>(args);
+        var builder = WebApplication.CreateSlimBuilder(args);
 
-        Options options;
-        if (res is Parsed<Options> parsed)
-        {
-            options = parsed.Value;
-        }
-        else
-        {
-            return res is NotParsed<Options> notParsed
-                ? res.Errors.Any(error => error is HelpRequestedError)
-                    ? 0
-                    : res.Errors.Any(error => error is VersionRequestedError)
-                    ? 0
-                    : 1
-                : 1;
-        }
+        builder.AddServiceDefaults();
+        builder.WebHost.UseKestrelHttpsConfiguration();
 
-        var loggerConfig = new LoggerConfiguration()
-                 .WriteTo.Console(formatProvider: CultureInfo.InvariantCulture)
-                 .WriteTo.File("logs/tile_renderer/log.txt", rollingInterval: RollingInterval.Day, rollOnFileSizeLimit: true, fileSizeLimitBytes: 8338607, outputTemplate: "{Timestamp:HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}", formatProvider: CultureInfo.InvariantCulture)
-                 .Enrich.WithProperty("ComponentName", "TileRenderer");
+        builder.Services.AddSingleton<StartupDependencies>();
+        builder.Services.AddSingleton(sp => sp.GetRequiredService<StartupDependencies>().EventBus);
+        builder.Services.AddSingleton(sp => sp.GetRequiredService<StartupDependencies>().StaticData);
+        builder.Services.AddSingleton(sp => sp.GetRequiredService<StartupDependencies>().TileDataSource);
+        builder.Services.AddHostedService<EventBusTileRenderer>();
 
-        if (!string.IsNullOrWhiteSpace(options.LoggerUrl))
-        {
-            loggerConfig.WriteTo.Http(options.LoggerUrl, 10 * 1024 * 1024);
-        }
+        using var app = builder.Build();
 
-        loggerConfig.MinimumLevel.Debug();
-        var log = loggerConfig.CreateLogger();
+        var loggerFactory = app.Services.GetRequiredService<ILoggerFactory>();
+        GlobalLoggerFactory.Initialize(loggerFactory);
 
-        Log.Logger = log;
+        var programLogger = loggerFactory.CreateLogger(nameof(App));
 
-        if (string.IsNullOrEmpty(options.MapTilerApiKey) && string.IsNullOrEmpty(options.TileDatabaseConnectionString))
-        {
-            Log.Fatal("No data source provided, either maptiler_key or tileDB must be specified.");
-            Log.CloseAndFlush();
-            return 1;
-        }
+        app.MapDefaultEndpoints();
 
         ITileDataSource tileDataSource;
-        if (options.MapTilerApiKey is not null)
+        if (!string.IsNullOrWhiteSpace(builder.Configuration["TileSource:TileJsonUrl"]))
         {
-            Log.Information("Verifying maptiler api key");
+            LogGettingTileSourceInfo(programLogger);
+
+            var infoUrl = builder.Configuration["TileSource:TileJsonUrl"];
+            Debug.Assert(infoUrl is not null);
 
             var httpClient = new HttpClient();
             HttpResponseMessage response;
             try
             {
-                response = await httpClient.GetAsync($"https://api.maptiler.com/tiles/v3/tiles.json?key={options.MapTilerApiKey}");
+                response = await httpClient.GetAsync(infoUrl);
             }
-            catch (HttpRequestException ex)
+            catch (HttpRequestException exception)
             {
-                Log.Fatal($"Could not connect to maptiler api: {ex}");
-                Log.CloseAndFlush();
-                return 1;
+                LogCouldNotConnectToTileSource(programLogger, exception);
+                loggerFactory.Dispose();
+                return 3;
             }
 
             if (!response.IsSuccessStatusCode)
             {
-                Log.Fatal($"Maptiler api key not valid, response status code: {response.StatusCode}");
-                Log.CloseAndFlush();
-                return 1;
+                LogCouldNotGetTileSourceInfo(programLogger, response.StatusCode);
+                loggerFactory.Dispose();
+                return 4;
             }
 
-            var json = await JsonSerializer.DeserializeAsync<JsonObject>(response.Content.ReadAsStream());
+            var tilesResponse = await JsonSerializer.DeserializeAsync(response.Content.ReadAsStream(), AppJsonContext.Default.TilesResponse);
 
             int maxZoom;
-            if (json is null || !json.TryGetPropertyValue("maxzoom", out JsonNode? maxZoomNode) || maxZoomNode is not JsonValue maxZoomValue || maxZoomValue.GetValueKind() != JsonValueKind.Number)
+            if (tilesResponse is null or { MaxZoom: null, })
             {
-                Log.Warning("Invalid maptiler response");
-                maxZoom = 15;
+                maxZoom = 14;
+                LogMissingMaxZoom(programLogger, maxZoom);
             }
             else
             {
-                maxZoom = maxZoomValue.GetValue<int>();
+                maxZoom = tilesResponse.MaxZoom.Value;
             }
 
-            tileDataSource = new MaptilerTileDataSource(options.MapTilerApiKey, maxZoom, httpClient);
+            if (tilesResponse is null or { TileUrls.IsDefaultOrEmpty: true, })
+            {
+                LogNoTileUrl(programLogger);
+                return 5;
+            }
 
-            Log.Information("Verified maptiler api key");
+            var tileSourceUrl = tilesResponse.TileUrls.First();
+
+            var tileSourceUrlFormat = CompositeFormat.Parse(tileSourceUrl.Replace("{z}", "{0}").Replace("{x}", "{1}").Replace("{y}", "{2}"));
+
+            tileDataSource = new OpenMapTilesDataSource(tileSourceUrlFormat, maxZoom, httpClient);
+
+            LogUsingTileUrl(programLogger, tileSourceUrl, maxZoom);
+        }
+        else if (!string.IsNullOrWhiteSpace(builder.Configuration["TileSource:TileDatabaseConnectionString"]))
+        {
+            LogConnectingToTileDatabase(programLogger);
+
+            var tileDatabaseConnectionString = builder.Configuration["TileSource:TileDatabaseConnectionString"];
+
+            Debug.Assert(tileDatabaseConnectionString is not null);
+
+            try
+            {
+                tileDataSource = new DatabaseTileDataSource(NpgsqlDataSource.Create(tileDatabaseConnectionString));
+            }
+            catch (Exception exception)
+            {
+                LogCouldNotConnectToTileDatabase(programLogger, exception);
+
+                if (exception is ArgumentException)
+                {
+                    LogTileDatabaseConnectionStringFormatInvalid(programLogger, tileDatabaseConnectionString);
+                }
+
+                loggerFactory.Dispose();
+                return 6;
+            }
+
+            LogConnectedToTileDatabase(programLogger);
         }
         else
         {
-            Debug.Assert(options.TileDatabaseConnectionString is not null);
-
-            Log.Information("Connecting to tile database");
-            try
-            {
-                tileDataSource = new DatabaseTileDataSource(NpgsqlDataSource.Create(options.TileDatabaseConnectionString));
-            }
-            catch (Exception ex)
-            {
-                Log.Fatal($"Could not connect to tile database: {ex}");
-                if (ex is ArgumentException)
-                {
-                    Log.Information($"The provided connection string is: '{options.TileDatabaseConnectionString}', make sure that it is in the correct format");
-                }
-
-                Log.CloseAndFlush();
-                return 1;
-            }
-
-            Log.Information("Connected to tile database");
+            LogNoTileDataSourceProvided(programLogger);
+            loggerFactory.Dispose();
+            return 7;
         }
 
-        Log.Information("Connecting to event bus");
+        LogLoadingStaticData(programLogger);
+        StaticData.StaticDataProvider staticData;
+        try
+        {
+            staticData = new StaticData.StaticDataProvider(builder.Configuration["StaticDataPath"]!);
+        }
+        catch (StaticDataException exception)
+        {
+            LogLoadStaticDataError(programLogger, exception);
+            loggerFactory.Dispose();
+            return 8;
+        }
+
+        LogLoadedStaticData(programLogger);
+
+        var eventBusConnectionString = builder.Configuration["services:event-bus:http:0"];
+        Debug.Assert(eventBusConnectionString is not null);
+
+        LogConnectingToEventBus(programLogger);
         EventBusClient eventBusClient;
         try
         {
-            eventBusClient = await EventBusClient.ConnectAsync(options.EventBusConnectionString ?? "");
+            eventBusClient = await EventBusClient.ConnectAsync(eventBusConnectionString, programLogger);
         }
-        catch (EventBusClientException ex)
+        catch (Exception exception)
         {
-            tileDataSource.Dispose();
-
-            Log.Fatal($"Could not connect to event bus: {ex}");
-            Log.CloseAndFlush();
-            return 1;
+            LogConnectToEventBusError(programLogger, exception);
+            loggerFactory.Dispose();
+            return 9;
         }
 
-        Log.Information("Connected to event bus");
+        LogConnectedToEventBus(programLogger);
 
-        Log.Information("Loading static data");
-        StaticData.StaticData staticData;
-        try
-        {
-            staticData = new StaticData.StaticData(options.StaticDataPath ?? "");
-        }
-        catch (StaticDataException staticDataException)
-        {
-            tileDataSource.Dispose();
+        // init stuff that requires logger but needs to be injected
+        var startupDeps = app.Services.GetRequiredService<StartupDependencies>();
+        startupDeps.TileDataSource = tileDataSource;
+        startupDeps.StaticData = staticData;
+        startupDeps.EventBus = eventBusClient;
 
-            Log.Fatal($"Failed to load static data: {staticDataException}");
-            Log.CloseAndFlush();
-            return 1;
-        }
-
-        Log.Information("Loaded static data");
-
-        await using (var renderer = new EventBusTileRenderer(tileDataSource, eventBusClient, staticData))
-        {
-            await renderer.RunAsync();
-        }
+        await app.RunAsync();
 
         return 0;
     }
+
+    internal sealed class StartupDependencies
+    {
+        public EventBusClient EventBus { get; set; } = null!;
+        public StaticData.StaticDataProvider StaticData { get; set; } = null!;
+        public ITileDataSource TileDataSource { get; set; } = null!;
+    }
+
+    [LoggerMessage(Level = LogLevel.Critical, Message = "Unhandled exception")]
+    private static partial void LogUnhandledException(ILogger logger, Exception? exception);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Getting tile source info")]
+    private static partial void LogGettingTileSourceInfo(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Critical, Message = "Could not connect to tile source")]
+    private static partial void LogCouldNotConnectToTileSource(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Critical, Message = "Could not get tile source info, response status code: {StatusCode}")]
+    private static partial void LogCouldNotGetTileSourceInfo(ILogger logger, System.Net.HttpStatusCode StatusCode);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Max zoom level not in tile source info, using default max zoom: {MaxZoom}")]
+    private static partial void LogMissingMaxZoom(ILogger logger, int MaxZoom);
+
+    [LoggerMessage(Level = LogLevel.Critical, Message = "Tile source info does not contain any tile urls")]
+    private static partial void LogNoTileUrl(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Using url '{Url}', max zoom: {MaxZoom}")]
+    private static partial void LogUsingTileUrl(ILogger logger, string Url, int MaxZoom);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Connecting to tile database")]
+    private static partial void LogConnectingToTileDatabase(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Critical, Message = "Could not connect to tile database")]
+    private static partial void LogCouldNotConnectToTileDatabase(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "The provided connection string is: '{TileDatabaseConnectionString}', make sure that it is in the correct format")]
+    private static partial void LogTileDatabaseConnectionStringFormatInvalid(ILogger logger, string TileDatabaseConnectionString);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Connected to tile database")]
+    private static partial void LogConnectedToTileDatabase(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Critical, Message = "No tile data source provided")]
+    private static partial void LogNoTileDataSourceProvided(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Loading static data")]
+    private static partial void LogLoadingStaticData(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Critical, Message = "Failed to load static data")]
+    private static partial void LogLoadStaticDataError(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Loaded static data")]
+    private static partial void LogLoadedStaticData(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Connecting to event bus")]
+    private static partial void LogConnectingToEventBus(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Critical, Message = "Could not connect to event bus")]
+    private static partial void LogConnectToEventBusError(ILogger logger, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Connected to event bus")]
+    private static partial void LogConnectedToEventBus(ILogger logger);
 }

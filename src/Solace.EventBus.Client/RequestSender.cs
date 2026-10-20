@@ -1,216 +1,159 @@
-﻿using System.Text.RegularExpressions;
+using System.Threading.Channels;
+using Google.Protobuf;
+using Grpc.Core;
+using Solace.EventBus.Client.Utils;
 
 namespace Solace.EventBus.Client;
 
-public sealed partial class RequestSender : IAsyncDisposable
+public sealed class RequestSender : IAsyncDisposable
 {
-    private readonly EventBusClient _client;
-    private readonly int _channelId;
-    private readonly SemaphoreSlim _lock = new(1, 1);
-    
-    private bool _closed;
-    private readonly Queue<string> _queuedRequests = new();
-    private readonly Queue<TaskCompletionSource<string?>> _queuedRequestResponses = new();
-    private TaskCompletionSource<string?>? _currentPendingResponse;
+    private readonly EventBusService.EventBusServiceClient _client;
 
-    internal RequestSender(EventBusClient client, int channelId)
+    internal RequestSender(EventBusService.EventBusServiceClient client)
     {
         _client = client;
-        _channelId = channelId;
     }
 
-    public async Task CloseAsync()
+    public Task<MessagePayload?> RequestAsync(string queueName, string type, string data, CancellationToken cancellationToken = default)
+        => RequestInternalAsync(new RequestMessage { QueueName = queueName, Type = type, StringData = data, }, cancellationToken);
+
+    public Task<MessagePayload?> RequestAsync(string queueName, string type, byte[] data, CancellationToken cancellationToken = default)
+        => RequestInternalAsync(new RequestMessage { QueueName = queueName, Type = type, BinaryData = UnsafeByteOperations.UnsafeWrap(data), }, cancellationToken);
+
+    public async Task<MessagePayload?> RequestAsync(string queueName, string type, Stream stream, CancellationToken cancellationToken = default)
     {
-        _client.RemoveRequestSender(_channelId);
-        await _client.SendMessageAsync(_channelId, "CLOSE");
-        await ClosedAsync();
-    }
+        var call = _client.RequestStream(cancellationToken: cancellationToken);
 
-    public async Task<string?> RequestAsync(string queueName, string type, string data)
-    {
-        if (!ValidateQueueName(queueName))
+        await call.RequestStream.WriteAsync(new RequestChunk
         {
-            throw new ArgumentException("Queue name contains invalid characters");
-        }
-
-        if (!ValidateType(type))
-        {
-            throw new ArgumentException("Type contains invalid characters");
-        }
-
-        if (!ValidateData(data))
-        {
-            throw new ArgumentException("Data contains invalid characters");
-        }
-
-        string requestMessage = $"REQ {queueName}:{type}:{data}";
-        var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        await _lock.WaitAsync();
-        try
-        {
-            if (_closed)
+            Metadata = new RequestMetadata
             {
-                tcs.SetResult(null);
+                QueueName = queueName,
+                Type = type,
+                IsStream = true,
+            }
+        }, cancellationToken);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await StreamUtils.SendStreamChunksAsync(stream, async (chunkMemory, isLast, cancellationToken) =>
+                {
+                    await call.RequestStream.WriteAsync(new RequestChunk
+                    {
+                        IsLastChunk = isLast,
+                        ChunkData = UnsafeByteOperations.UnsafeWrap(chunkMemory),
+                    }, cancellationToken);
+                }, cancellationToken);
+
+                await call.RequestStream.CompleteAsync();
+            }
+            catch
+            {
+            }
+        }, cancellationToken);
+
+        return await ReadResponseStreamAsync(call, cancellationToken);
+    }
+
+    public ValueTask DisposeAsync()
+        => ValueTask.CompletedTask; // if this needs an implementation, also change EventBusClient, since it uses a singleton
+
+    private async Task<MessagePayload?> RequestInternalAsync(RequestMessage requestMessage, CancellationToken cancellationToken)
+    {
+        var response = await _client.RequestAsync(requestMessage, cancellationToken: cancellationToken).ResponseAsync;
+
+        return response.Status switch
+        {
+            ResponseMessage.Types.Status.Success => response.PayloadCase is ResponseMessage.PayloadOneofCase.BinaryData
+                ? new MessagePayload(response.BinaryData.Memory)
+                : new MessagePayload(response.StringData),
+            ResponseMessage.Types.Status.NoHandlers => (MessagePayload?)null,
+#pragma warning disable CA2201 // Do not raise reserved exception types
+            _ => throw new Exception(response.ErrorMessage),
+#pragma warning restore CA2201 // Do not raise reserved exception types
+        };
+    }
+
+    private static async Task<MessagePayload?> ReadResponseStreamAsync(
+        AsyncDuplexStreamingCall<RequestChunk, ResponseChunk> call,
+        CancellationToken cancellationToken)
+    {
+        var responseStream = call.ResponseStream;
+        if (!await responseStream.MoveNext(cancellationToken))
+        {
+            throw new RpcException(new Status(StatusCode.Internal, "No response received from server."));
+        }
+
+        var firstMsg = responseStream.Current;
+
+        if (firstMsg.Status is ResponseMessage.Types.Status.NoHandlers)
+        {
+            return null;
+        }
+
+        if (firstMsg.Status is not ResponseMessage.Types.Status.Success)
+        {
+#pragma warning disable CA2201 // Do not raise reserved exception types
+            throw new Exception(firstMsg.ErrorMessage);
+#pragma warning restore CA2201 // Do not raise reserved exception types
+        }
+
+        if (firstMsg.IsStream)
+        {
+            var channel = Channel.CreateUnbounded<ReadOnlyMemory<byte>>(new UnboundedChannelOptions
+            {
+                SingleWriter = true,
+                SingleReader = true,
+            });
+
+            if (firstMsg.PayloadCase is ResponseChunk.PayloadOneofCase.BinaryData && !firstMsg.BinaryData.IsEmpty)
+            {
+                channel.Writer.TryWrite(firstMsg.BinaryData.Memory);
+            }
+
+            if (firstMsg.IsLastChunk)
+            {
+                channel.Writer.TryComplete();
             }
             else
             {
-                _queuedRequests.Enqueue(requestMessage);
-                _queuedRequestResponses.Enqueue(tcs);
-
-                if (_currentPendingResponse == null)
+                _ = Task.Run(async () =>
                 {
-                    await SendNextRequestAsync();
-                }
-            }
-        }
-        finally
-        {
-            _lock.Release();
-        }
+                    try
+                    {
+                        while (await responseStream.MoveNext(cancellationToken))
+                        {
+                            var chunkMsg = responseStream.Current;
+                            if (chunkMsg.PayloadCase is ResponseChunk.PayloadOneofCase.BinaryData && !chunkMsg.BinaryData.IsEmpty)
+                            {
+                                await channel.Writer.WriteAsync(chunkMsg.BinaryData.Memory, cancellationToken);
+                            }
 
-        return await tcs.Task;
-    }
+                            if (chunkMsg.IsLastChunk)
+                            {
+                                break;
+                            }
+                        }
 
-    public async Task FlushAsync()
-    {
-        Task<string?>? taskToAwait = null;
-
-        await _lock.WaitAsync();
-        try
-        {
-            taskToAwait = _queuedRequestResponses.Count == 0 
-                ? _currentPendingResponse?.Task 
-                : _queuedRequestResponses.Last().Task; // Extension method or Peek for simple queue
-        }
-        finally
-        {
-            _lock.Release();
-        }
-
-        if (taskToAwait != null)
-        {
-            await taskToAwait;
-        }
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        await FlushAsync();
-        await CloseAsync();
-    }
-
-    internal async Task<bool> HandleMessageAsync(string message)
-    {
-        if (message == "ERR")
-        {
-            await CloseAsync();
-            return true;
-        }
-
-        if (message == "ACK")
-        {
-            return true;
-        }
-
-        string? response;
-        string[] parts = message.Split(' ', 2);
-        
-        if (parts[0] == "NREP")
-        {
-            if (parts.Length != 1)
-            {
-                return false;
+                        channel.Writer.TryComplete();
+                    }
+                    catch (Exception exception)
+                    {
+                        channel.Writer.TryComplete(exception);
+                    }
+                }, cancellationToken);
             }
 
-            response = null;
+            return new MessagePayload(new ChannelStream(channel.Reader));
         }
-        else if (parts[0] == "REP")
+
+        return firstMsg.PayloadCase switch
         {
-            if (parts.Length != 2)
-            {
-                return false;
-            }
-
-            response = parts[1];
-        }
-        else
-        {
-            return false;
-        }
-
-        await _lock.WaitAsync();
-        try
-        {
-            if (_currentPendingResponse != null)
-            {
-                _currentPendingResponse.SetResult(response);
-                _currentPendingResponse = null;
-
-                if (_queuedRequests.Count > 0)
-                {
-                    await SendNextRequestAsync();
-                }
-
-                return true;
-            }
-
-            return false;
-        }
-        finally
-        {
-            _lock.Release();
-        }
+            ResponseChunk.PayloadOneofCase.BinaryData => new MessagePayload(firstMsg.BinaryData.Memory),
+            ResponseChunk.PayloadOneofCase.StringData => new MessagePayload(firstMsg.StringData),
+            _ => (MessagePayload?)null
+        };
     }
-
-    private async Task SendNextRequestAsync()
-    {
-        string message = _queuedRequests.Dequeue();
-        await _client.SendMessageAsync(_channelId, message);
-        _currentPendingResponse = _queuedRequestResponses.Dequeue();
-    }
-
-    internal async Task ClosedAsync()
-    {
-        await _lock.WaitAsync();
-        try
-        {
-            _closed = true;
-            _currentPendingResponse?.TrySetResult(null);
-            _currentPendingResponse = null;
-
-            while (_queuedRequestResponses.Count > 0)
-            {
-                _queuedRequestResponses.Dequeue().TrySetResult(null);
-            }
-
-            _queuedRequests.Clear();
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
-
-    private static bool ValidateQueueName(string queueName)
-        => !string.IsNullOrEmpty(queueName) &&
-            !queueName.Any(c => c < 32 || c >= 127) &&
-            !GetValidationRegex1().IsMatch(queueName) &&
-            !GetValidationRegex2().IsMatch(queueName);
-
-    private static bool ValidateType(string type)
-        => !string.IsNullOrEmpty(type) &&
-            !type.Any(c => c < 32 || c >= 127) &&
-            !GetValidationRegex1().IsMatch(type) &&
-            !GetValidationRegex2().IsMatch(type);
-
-    private static bool ValidateData(string data)
-        => !data.Any(c => c < 32 || c >= 127);
-
-
-    [GeneratedRegex("^[^A-Za-z0-9_\\-]$")]
-    private static partial Regex GetValidationRegex1();
-
-    [GeneratedRegex("^[^A-Za-z0-9]$")]
-    private static partial Regex GetValidationRegex2();
 }

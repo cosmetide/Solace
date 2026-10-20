@@ -1,255 +1,110 @@
-﻿using Serilog;
-using System.Buffers;
-using System.Collections.Concurrent;
-using System.IO.Pipelines;
-using System.Net.Sockets;
-using System.Text;
-using System.Threading.Channels;
+﻿using Grpc.Net.Client;
+using Microsoft.Extensions.Logging;
 
 namespace Solace.EventBus.Client;
 
-public sealed class EventBusClient : IAsyncDisposable
+public sealed partial class EventBusClient : IAsyncDisposable
 {
-    private readonly TcpClient _tcpClient;
-    private readonly NetworkStream _networkStream;
+    private readonly GrpcChannel _channel;
+    private readonly EventBusService.EventBusServiceClient _client;
 
-    private readonly Channel<string> _outgoingMessageQueue;
-    private readonly Task _outgoingTask;
-    private readonly Task _incomingTask;
-    private readonly CancellationTokenSource _cts = new();
+    private readonly SemaphoreSlim _subscribersLock = new(1, 1);
 
-    private int _isClosed;
-    private int _hasError;
+    private readonly SemaphoreSlim _handlersLock = new(1, 1);
 
-    private readonly ConcurrentDictionary<int, Publisher> _publishers = new();
-    private readonly ConcurrentDictionary<int, Subscriber> _subscribers = new();
-    private readonly ConcurrentDictionary<int, RequestSender> _requestSenders = new();
-    private readonly ConcurrentDictionary<int, RequestHandler> _requestHandlers = new();
+    private List<Subscriber>? _subscribers;
 
-    private int _nextChannelId = 1;
+    private List<RequestHandler>? _handlers;
 
-    private EventBusClient(TcpClient tcpClient)
+    private RequestSender RequestSender => field ??= new RequestSender(_client);
+
+    private Publisher Publisher => field ??= new Publisher(_client);
+
+    internal volatile byte _disposed;
+
+    public EventBusClient(GrpcChannel channel, EventBusService.EventBusServiceClient client)
     {
-        _tcpClient = tcpClient;
-        _networkStream = _tcpClient.GetStream();
-        _outgoingMessageQueue = Channel.CreateUnbounded<string>(new UnboundedChannelOptions
-        {
-            SingleReader = true,
-            SingleWriter = false
-        });
-
-        _outgoingTask = Task.Run(ProcessOutgoingMessagesAsync);
-        _incomingTask = Task.Run(ProcessIncomingMessagesAsync);
+        _channel = channel;
+        _client = client;
     }
 
-    public static async Task<EventBusClient> ConnectAsync(string connectionString)
+    public static async Task<EventBusClient> ConnectAsync(string connectionString, ILogger logger)
     {
-        string[] parts = connectionString.Split(':', 2);
-        string host = parts[0];
+        _ = logger;
 
-        if (parts.Length <= 1 || !int.TryParse(parts[1], out int port))
-        {
-            port = 5532;
-        }
+        var channel = GrpcChannel.ForAddress(connectionString);
+        var client = new EventBusService.EventBusServiceClient(channel);
 
-        if (port is <= 0 or > 65535)
-        {
-            throw new ArgumentException("Port number out of range");
-        }
-
-        var tcpClient = new TcpClient();
-        try
-        {
-            await tcpClient.ConnectAsync(host, port);
-        }
-        catch (Exception exception) when (exception is SocketException or IOException)
-        {
-            tcpClient.Dispose();
-            throw new ConnectException("Could not create socket", exception);
-        }
-
-        return new EventBusClient(tcpClient);
-    }
-
-    public sealed class ConnectException : Exception
-    {
-        public ConnectException(string message) : base(message) { }
-        public ConnectException(string message, Exception innerException) : base(message, innerException) { }
+        return new EventBusClient(channel, client);
     }
 
     public async ValueTask DisposeAsync()
     {
-        await InitiateCloseAsync();
-
-        try
+        if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
         {
-            await Task.WhenAll(_incomingTask, _outgoingTask);
+            return;
         }
-        catch
-        {
-            // Suppress exceptions from cancelled background tasks
-        }
-    }
 
-    private async Task InitiateCloseAsync()
-    {
-        if (Interlocked.Exchange(ref _isClosed, 1) == 0)
+        await _subscribersLock.WaitAsync();
+        if (_subscribers is not null)
         {
-            _cts.Cancel();
-            _outgoingMessageQueue.Writer.TryComplete();
-
-            try
+            foreach (var subscriber in _subscribers)
             {
-                _tcpClient.Dispose(); // Closes underlying stream and socket
-            }
-            catch
-            {
-                // empty
+                await subscriber.DisposeAsync();
             }
         }
 
-        await Task.CompletedTask;
-    }
+        _subscribersLock.Release();
+        _subscribersLock.Dispose();
 
-    private void SetError()
-    {
-        Interlocked.Exchange(ref _hasError, 1);
-        _ = InitiateCloseAsync(); // Fire and forget closure on error
-    }
-
-    private async Task ProcessOutgoingMessagesAsync()
-    {
-        try
+        await _handlersLock.WaitAsync();
+        if (_handlers is not null)
         {
-            await foreach (var message in _outgoingMessageQueue.Reader.ReadAllAsync(_cts.Token))
+            foreach (var handler in _handlers)
             {
-                byte[] buffer = Encoding.ASCII.GetBytes(message);
-                await _networkStream.WriteAsync(buffer, _cts.Token);
-                await _networkStream.FlushAsync(_cts.Token);
+                await handler.DisposeAsync();
             }
         }
-        catch (Exception ex) when (ex is OperationCanceledException or IOException or SocketException)
-        {
-            SetError();
-        }
 
-        await InitiateCloseAsync();
+        _handlersLock.Release();
+        _handlersLock.Dispose();
 
-        foreach (var kvp in _publishers)
-        {
-            await kvp.Value.ClosedAsync();
-        }
-
-        _publishers.Clear();
-
-        foreach (var kvp in _requestSenders)
-        {
-            await kvp.Value.ClosedAsync();
-        }
-
-        _requestSenders.Clear();
-    }
-
-    private async Task ProcessIncomingMessagesAsync()
-    {
-        var reader = PipeReader.Create(_networkStream);
-
-        try
-        {
-            while (true)
-            {
-                ReadResult result = await reader.ReadAsync(_cts.Token);
-                ReadOnlySequence<byte> buffer = result.Buffer;
-
-                while (TryReadLine(ref buffer, out ReadOnlySequence<byte> line))
-                {
-                    string message = Encoding.ASCII.GetString(line.IsSingleSegment ? line.FirstSpan : line.ToArray());
-
-                    bool suppress = Volatile.Read(ref _isClosed) == 1 || Volatile.Read(ref _hasError) == 1;
-                    if (!suppress)
-                    {
-                        if (!await DispatchReceivedMessageAsync(message))
-                        {
-                            SetError();
-                        }
-                    }
-                }
-
-                reader.AdvanceTo(buffer.Start, buffer.End);
-
-                if (result.IsCompleted)
-                {
-                    break;
-                }
-            }
-        }
-        catch (Exception ex) when (ex is OperationCanceledException or IOException or SocketException)
-        {
-            Log.Error(ex, "EventBusClient error");
-            SetError();
-        }
-
-        await reader.CompleteAsync();
-        await InitiateCloseAsync();
-
-        foreach (var kvp in _subscribers)
-        {
-            await kvp.Value.ErrorAsync();
-        }
-
-        _subscribers.Clear();
-
-        foreach (var kvp in _requestHandlers)
-        {
-            await kvp.Value.ErrorAsync();
-        }
-
-        _requestHandlers.Clear();
-    }
-
-    private static bool TryReadLine(ref ReadOnlySequence<byte> buffer, out ReadOnlySequence<byte> line)
-    {
-        SequencePosition? position = buffer.PositionOf((byte)'\n');
-        if (position == null)
-        {
-            line = default;
-            return false;
-        }
-
-        line = buffer.Slice(0, position.Value);
-        buffer = buffer.Slice(buffer.GetPosition(1, position.Value));
-        return true;
+        await _channel.ShutdownAsync();
+        _channel.Dispose();
     }
 
     public async Task<Publisher> AddPublisherAsync()
     {
-        int channelId = GetUnusedChannelId();
-        var publisher = new Publisher(this, channelId);
+        ThrowIfDisposed();
 
-        if (await SendMessageAsync(channelId, "PUB"))
-        {
-            _publishers.TryAdd(channelId, publisher);
-        }
-        else
-        {
-            await publisher.ClosedAsync();
-        }
-
-        return publisher;
+        return Publisher;
     }
 
-    public async Task<Subscriber> AddSubscriberAsync(string queueName, ISubscriberListener listener)
+    public async Task<Subscriber> AddSubscriberAsync(string queueName, Func<SubscriberEvent, CancellationToken, Task> onEvent, Func<Exception?, Task> onError)
     {
-        int channelId = GetUnusedChannelId();
-        var subscriber = new Subscriber(this, channelId, queueName, listener);
+        ThrowIfDisposed();
 
-        if (await SendMessageAsync(channelId, $"SUB {queueName}"))
+        var subscriber = new Subscriber(_client, queueName, onEvent, onError);
+
+        await _subscribersLock.WaitAsync();
+
+        await subscriber.StartAsync();
+
+        try
         {
-            _subscribers.TryAdd(channelId, subscriber);
+            ThrowIfDisposed();
+
+            _subscribers ??= [];
+            _subscribers.Add(subscriber);
         }
-        else
+        catch (ObjectDisposedException)
         {
-            await subscriber.ErrorAsync();
+            await subscriber.DisposeAsync();
+            throw;
+        }
+        finally
+        {
+            _subscribersLock.Release();
         }
 
         return subscriber;
@@ -257,101 +112,83 @@ public sealed class EventBusClient : IAsyncDisposable
 
     public async Task<RequestSender> AddRequestSenderAsync()
     {
-        int channelId = GetUnusedChannelId();
-        var requestSender = new RequestSender(this, channelId);
+        ThrowIfDisposed();
 
-        if (await SendMessageAsync(channelId, "REQ"))
-        {
-            _requestSenders.TryAdd(channelId, requestSender);
-        }
-        else
-        {
-            await requestSender.ClosedAsync();
-        }
-
-        return requestSender;
+        return RequestSender;
     }
 
-    public async Task<RequestHandler> AddRequestHandlerAsync(string queueName, IRequestHandlerLister handler)
+    public async Task<RequestHandler> AddRequestHandlerAsync(string queueName, Func<RequestHandlerRequest, CancellationToken, Task<MessagePayload?>> onRequest, Func<Exception?, Task> onError)
     {
-        int channelId = GetUnusedChannelId();
-        var requestHandler = new RequestHandler(this, channelId, queueName, handler);
+        ThrowIfDisposed();
 
-        if (await SendMessageAsync(channelId, $"HND {queueName}"))
-        {
-            _requestHandlers.TryAdd(channelId, requestHandler);
-        }
-        else
-        {
-            await requestHandler.ErrorAsync();
-        }
+        var handler = new RequestHandler(_client, queueName, onRequest, onError);
 
-        return requestHandler;
-    }
+        await _handlersLock.WaitAsync();
 
-    internal void RemovePublisher(int channelId) => _publishers.TryRemove(channelId, out _);
-    internal void RemoveSubscriber(int channelId) => _subscribers.TryRemove(channelId, out _);
-    internal void RemoveRequestSender(int channelId) => _requestSenders.TryRemove(channelId, out _);
-    internal void RemoveRequestHandler(int channelId) => _requestHandlers.TryRemove(channelId, out _);
-
-    private int GetUnusedChannelId()
-        => Interlocked.Increment(ref _nextChannelId) - 1;
-
-    private async Task<bool> DispatchReceivedMessageAsync(string message)
-    {
-        string[] parts = message.Split(' ', 2);
-        if (parts.Length != 2)
-        {
-            return false;
-        }
-
-        if (!int.TryParse(parts[0], out int channelId) || channelId <= 0)
-        {
-            return false;
-        }
-
-        if (_publishers.TryGetValue(channelId, out var publisher))
-        {
-            return await publisher.HandleMessageAsync(parts[1]);
-        }
-
-        if (_subscribers.TryGetValue(channelId, out var subscriber))
-        {
-            return await subscriber.HandleMessageAsync(parts[1]);
-        }
-
-        if (_requestSenders.TryGetValue(channelId, out var requestSender))
-        {
-            return await requestSender.HandleMessageAsync(parts[1]);
-        }
-
-        if (_requestHandlers.TryGetValue(channelId, out var requestHandler))
-        {
-            return await requestHandler.HandleMessageAsync(parts[1]);
-        }
-
-        return channelId < Volatile.Read(ref _nextChannelId);
-    }
-
-    internal async ValueTask<bool> SendMessageAsync(int channelId, string message)
-    {
-        if (Volatile.Read(ref _isClosed) == 1 || Volatile.Read(ref _hasError) == 1)
-        {
-            return false;
-        }
+        await handler.StartAsync();
 
         try
         {
-            await _outgoingMessageQueue.Writer.WriteAsync($"{channelId} {message}\n", _cts.Token);
-            return true;
+            ThrowIfDisposed();
+
+            _handlers ??= [];
+            _handlers.Add(handler);
         }
-        catch (ChannelClosedException)
+        catch (ObjectDisposedException)
         {
-            return false;
+            await handler.DisposeAsync();
+            throw;
         }
-        catch (OperationCanceledException)
+        finally
         {
-            return false;
+            _handlersLock.Release();
         }
+
+        return handler;
     }
+
+    public Task<bool> PublishAsync(string queueName, string type, string data, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+
+        return Publisher.PublishAsync(queueName, type, data, cancellationToken);
+    }
+
+    public Task<bool> PublishAsync(string queueName, string type, byte[] data, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+
+        return Publisher.PublishAsync(queueName, type, data, cancellationToken);
+    }
+
+    public Task<bool> PublishAsync(string queueName, string type, Stream stream, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+
+        return Publisher.PublishAsync(queueName, type, stream, cancellationToken);
+    }
+
+    public Task<MessagePayload?> RequestAsync(string queueName, string type, string data, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+
+        return RequestSender.RequestAsync(queueName, type, data, cancellationToken);
+    }
+
+    public Task<MessagePayload?> RequestAsync(string queueName, string type, byte[] data, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+
+        return RequestSender.RequestAsync(queueName, type, data, cancellationToken);
+    }
+
+    public Task<MessagePayload?> RequestAsync(string queueName, string type, Stream stream, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+
+        return RequestSender.RequestAsync(queueName, type, stream, cancellationToken);
+    }
+
+    private void ThrowIfDisposed()
+        => ObjectDisposedException.ThrowIf(_disposed != 0, this);
 }

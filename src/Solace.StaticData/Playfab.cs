@@ -1,25 +1,30 @@
 ﻿using System.Collections.Frozen;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 namespace Solace.StaticData;
 
 public sealed class Playfab
 {
+    public readonly Version Version;
+
     public readonly FrozenDictionary<Guid, Item> Items;
 
-    public readonly ImmutableArray<Tab> ShopTabs;
+    public readonly ImmutableArray<Tab> StoreTabs;
 
-    public readonly ImmutableArray<string> ShopNotSearchQueryTags;
+    public readonly ImmutableArray<string> StoreNotSearchQueryTags;
 
     internal Playfab(string dir)
     {
         try
         {
-            var shopTabs = ImmutableArray.CreateBuilder<Tab>(2);
-            foreach (string file in Directory.EnumerateFiles(Path.Combine(dir, "shop_tabs"))
-                .OrderBy(file => Path.GetFileName(file)))
+            Version = Version.Parse(File.ReadAllText(Path.Combine(dir, "version.txt")));
+
+            var storeTabs = ImmutableArray.CreateBuilder<Tab>(2);
+            foreach (var file in Directory.EnumerateFiles(Path.Combine(dir, "store_tabs"))
+                .OrderBy(file => Path.GetFileName(file), StringComparer.Create(CultureInfo.InvariantCulture, CompareOptions.NumericOrdering)))
             {
                 if (Path.GetExtension(file) != ".json")
                 {
@@ -28,21 +33,21 @@ public sealed class Playfab
 
                 using (var stream = File.OpenRead(file))
                 {
-                    var tab = JsonSerializer.Deserialize<Tab>(stream);
+                    var tab = JsonSerializer.Deserialize(stream, AppJsonContext.Default.Tab);
 
                     Debug.Assert(tab is not null);
 
-                    shopTabs.Add(tab);
+                    storeTabs.Add(tab);
                 }
             }
 
-            ShopTabs = shopTabs.DrainToImmutable();
+            StoreTabs = storeTabs.DrainToImmutable();
 
-            ShopNotSearchQueryTags = [.. File.ReadLines(Path.Combine(dir, "shop_not_search_query_tags.txt"))
+            StoreNotSearchQueryTags = [.. File.ReadLines(Path.Combine(dir, "store_not_search_query_tags.txt"))
                 .Where(line => !string.IsNullOrWhiteSpace(line) && line.Length > 0)];
 
             List<Item> items = [];
-            foreach (string file in Directory.EnumerateFiles(Path.Combine(dir, "items")))
+            foreach (var file in Directory.EnumerateFiles(Path.Combine(dir, "items")))
             {
                 if (Path.GetExtension(file) != ".json")
                 {
@@ -51,7 +56,7 @@ public sealed class Playfab
 
                 using (var stream = File.OpenRead(file))
                 {
-                    var item = JsonSerializer.Deserialize<Item>(stream);
+                    var item = JsonSerializer.Deserialize(stream, AppJsonContext.Default.PlayfabItem);
 
                     Debug.Assert(item is not null);
 
@@ -62,10 +67,10 @@ public sealed class Playfab
             items.Add(new Item(
                 true,
                 new Item.QueryManifestData(
-                    "0.25.0",
-                    "1.0.20",
-                    ShopTabs,
-                    ShopNotSearchQueryTags
+                    new Version(0, 25, 0),
+                    new Version(1, 0, 20),
+                    StoreTabs,
+                    StoreNotSearchQueryTags
                 ),
                 "Home L1",
                 "Home L1",
@@ -78,18 +83,18 @@ public sealed class Playfab
                 "B63A0803D3653643",
                 "3C0BE9326354CBB7",
                 ["mctestdefault"],
-                new Dictionary<string, Item.KeywordValues>() { ["en-US"] = new([]), ["NEUTRAL"] = new([]), ["neutral"] = new([]), },
-                [new Item.QueryManifestContent(
-                   "f3f2b4fc-f144-4357-9e41-198db3a47957",
+                new Dictionary<string, Item.KeywordValues>(StringComparer.Ordinal) { ["en-US"] = new([]), ["NEUTRAL"] = new([]), ["neutral"] = new([]), },
+                new Item.QueryManifestContent(
+                    Guid.Parse("f3f2b4fc-f144-4357-9e41-198db3a47957"),
                     "/playfab/master_loc_contents.json",
-                     "6555.6555.6555",
-                     "1.2.0",
-                     [],
-                     "resourcebinary"
-                )],
+                    new Version(6555, 6555, 6555),
+                    new Version(1, 2, 0),
+                    [],
+                    "resourcebinary"
+                ),
                 [],
-                new Dictionary<string, string>() { ["en-US"] = "Home L1" },
-                new Dictionary<string, string>() { ["en-US"] = "Home L1" }
+                new Dictionary<string, string>(StringComparer.Ordinal) { ["en-US"] = "Home L1" },
+                new Dictionary<string, string>(StringComparer.Ordinal) { ["en-US"] = "Home L1" }
             ));
 
             Items = items.ToFrozenDictionary(item => item.Id);
@@ -100,7 +105,7 @@ public sealed class Playfab
         }
     }
 
-    [JsonConverter(typeof(JsonStringEnumConverter))]
+    [JsonConverter(typeof(JsonStringEnumConverter<ContentType>))]
     public enum ContentType
     {
         Durable,
@@ -118,7 +123,7 @@ public sealed class Playfab
         Item.ItemData Data,
         string Title,
         string Description,
-        string? ThumbnailImageId,
+        Guid? ThumbnailImageId,
         DateTime CreationDate,
         DateTime LastModifiedDate,
         DateTime StartDate,
@@ -128,7 +133,7 @@ public sealed class Playfab
         string CreatorEntityId,
         IReadOnlyList<string> Tags,
         IReadOnlyDictionary<string, Item.KeywordValues> Keywords,
-        IReadOnlyList<object> Contents,
+        Item.QueryManifestContent? ManifestContent,
         IReadOnlyList<Item.ItemReference> ItemReferences,
         IReadOnlyDictionary<string, string> TitleTranslations,
         IReadOnlyDictionary<string, string> DescriptionTranslations
@@ -138,7 +143,7 @@ public sealed class Playfab
             IReadOnlyList<string> Values
         );
 
-        [JsonConverter(typeof(JsonStringEnumConverter))]
+        [JsonConverter(typeof(JsonStringEnumConverter<Rarity>))]
         public enum Rarity
         {
             None,
@@ -149,8 +154,8 @@ public sealed class Playfab
             Legendary,
         }
 
-        [JsonConverter(typeof(JsonStringEnumConverter))]
-        public enum BuidplateSize
+        [JsonConverter(typeof(JsonStringEnumConverter<BuildplateSize>))]
+        public enum BuildplateSize
         {
             Small,
             Medium,
@@ -158,10 +163,10 @@ public sealed class Playfab
         }
 
         public sealed record QueryManifestContent(
-            string Id,
+            Guid Id,
             string Url,
-            string MaxClientVersion,
-            string MinClientVersion,
+            Version MaxClientVersion,
+            Version MinClientVersion,
             IReadOnlyList<string> Tags,
             string Type
         );
@@ -169,7 +174,6 @@ public sealed class Playfab
         [JsonPolymorphic(TypeDiscriminatorPropertyName = "Type")]
         [JsonDerivedType(typeof(BuildplateData), "Buildplate")]
         [JsonDerivedType(typeof(InventoryItemData), "InventoryItem")]
-        [JsonDerivedType(typeof(RubyData), "Ruby")]
         public abstract record ItemData
         {
         }
@@ -177,10 +181,10 @@ public sealed class Playfab
         public sealed record BuildplateData(
             Guid Id,
             int Cost,
-            BuidplateSize Size,
+            BuildplateSize Size,
             int UnlockLevel,
             Rarity Rarity,
-            string Version
+            Version Version
         ) : ItemData;
 
         public sealed record InventoryItemData(
@@ -188,20 +192,13 @@ public sealed class Playfab
             int Cost,
             int Amount,
             Rarity Rarity,
-            string Version
+            Version Version
         ) : ItemData;
 
-        public sealed record RubyData(
-            int CoinCount,
-            int? BonusCoinCount,
-            string Sku,
-            string OriginalCreatorId
-        ) : ItemData;
-
-        // does not have type discriminator, so cannot be loaded from items, instead created manually from shop tabs
+        // does not have type discriminator, so cannot be loaded from items, instead created manually from store tabs
         public sealed record QueryManifestData(
-            string MinClientVersion,
-            string MaxClientVersion,
+            Version MinClientVersion,
+            Version MaxClientVersion,
             IReadOnlyList<Tab> Tabs,
             IReadOnlyList<string> GlobalNotSearchQueryTags
         ) : ItemData;
@@ -225,7 +222,7 @@ public sealed class Playfab
             Guid ComponentId
         );
 
-        [JsonConverter(typeof(JsonStringEnumConverter))]
+        [JsonConverter(typeof(JsonStringEnumConverter<ColumnType>))]
         public enum ColumnType
         {
             Rectangle,

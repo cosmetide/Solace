@@ -14,13 +14,13 @@ public static class DictionaryExtensions
 
         public TValue? ComputeIfAbsent(TKey key, Func<TKey, TValue?> mappingFunction)
         {
-            if (dicionary.TryGetValue(key, out TValue? value))
+            if (dicionary.TryGetValue(key, out var value))
             {
                 return value;
             }
             else
             {
-                TValue? newValue = mappingFunction(key);
+                var newValue = mappingFunction(key);
                 if (newValue is null)
                 {
                     return default;
@@ -45,7 +45,7 @@ public static class DictionaryExtensions
                 }
             }
 
-            for (int i = 0; i < toRemove.Count; i++)
+            for (var i = 0; i < toRemove.Count; i++)
             {
                 dicionary.Remove(toRemove[i]);
             }

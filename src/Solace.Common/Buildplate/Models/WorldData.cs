@@ -2,15 +2,16 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Serilog;
+using Microsoft.Extensions.Logging;
 using Solace.Common;
 using Solace.Common.Utils;
+using static Solace.Buildplate.Model.WorldData.Logs;
 
 #pragma warning disable IDE0130 // Namespace does not match folder structure
 namespace Solace.Buildplate.Model;
 #pragma warning restore IDE0130 // Namespace does not match folder structure
 
-public sealed record WorldData(
+public sealed partial record class WorldData(
     byte[] ServerData,
     int Size,
     int Offset,
@@ -21,7 +22,7 @@ public sealed record WorldData(
 
     public static async Task<WorldData?> LoadFromZipAsync(Stream stream, ILogger logger, CancellationToken cancellationToken = default)
     {
-        Dictionary<string, byte[]> worldFileContents = [];
+        Dictionary<string, byte[]> worldFileContents = [with(StringComparer.Ordinal)];
 
         try
         {
@@ -42,7 +43,7 @@ public sealed record WorldData(
 #pragma warning disable CA2014 // Do not use stackalloc in loops
                         Span<Range> parts = stackalloc Range[3];
 #pragma warning restore CA2014 // Do not use stackalloc in loops
-                        int partCount = entryPath.SplitAny(parts, ['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
+                        var partCount = entryPath.SplitAny(parts, ['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
 
                         if (partCount != 2)
                         {
@@ -60,7 +61,7 @@ public sealed record WorldData(
                         }
                     }
 
-                    using (var entryStream = entry.Open())
+                    using (var entryStream = await entry.OpenAsync(cancellationToken))
                     using (var ms = new MemoryStream())
                     {
                         await entryStream.CopyToAsync(ms, cancellationToken);
@@ -70,9 +71,9 @@ public sealed record WorldData(
                 }
             }
         }
-        catch (IOException ex)
+        catch (IOException exception)
         {
-            logger.Error($"Could not read world file: {ex}");
+            LogWorldFileReadError(logger, exception);
             return null;
         }
 
@@ -83,20 +84,20 @@ public sealed record WorldData(
             {
                 using (var zip = new ZipArchive(zipStream, ZipArchiveMode.Create, true))
                 {
-                    foreach (string dirName in (IEnumerable<string>)["region", "entities"])
+                    foreach (var dirName in (IEnumerable<string>)["region", "entities"])
                     {
-                        foreach (string fileName in (IEnumerable<string>)["r.0.0.mca", "r.0.-1.mca", "r.-1.0.mca", "r.-1.-1.mca"])
+                        foreach (var fileName in (IEnumerable<string>)["r.0.0.mca", "r.0.-1.mca", "r.-1.0.mca", "r.-1.-1.mca"])
                         {
-                            string filePath = $"{dirName}/{fileName}";
+                            var filePath = $"{dirName}/{fileName}";
 
-                            if (!worldFileContents.TryGetValue(filePath, out byte[]? data))
+                            if (!worldFileContents.TryGetValue(filePath, out var data))
                             {
-                                Log.Error($"World file is missing {filePath}");
+                                LogWorldFileFileMissing(logger, filePath);
                                 return null;
                             }
 
                             var entry = zip.CreateEntry(filePath, CompressionLevel.SmallestSize);
-                            using (var entryStream = entry.Open())
+                            using (var entryStream = await entry.OpenAsync(cancellationToken))
                             {
                                 entryStream.Write(data);
                             }
@@ -107,14 +108,14 @@ public sealed record WorldData(
                 serverData = zipStream.ToArray();
             }
         }
-        catch (IOException ex)
+        catch (IOException exception)
         {
-            logger.Error($"Could not prepare server data: {ex}");
+            LogServerDataPrepareError(logger, exception);
             return null;
         }
 
-        byte[]? buildplateMetadataFileData = worldFileContents.GetValueOrDefault(MetadataFileName);
-        string? buildplateMetadataString = buildplateMetadataFileData is not null
+        var buildplateMetadataFileData = worldFileContents.GetValueOrDefault(MetadataFileName);
+        var buildplateMetadataString = buildplateMetadataFileData is not null
             ? Encoding.UTF8.GetString(buildplateMetadataFileData)
             : null;
 
@@ -124,26 +125,37 @@ public sealed record WorldData(
 
     public static WorldData? Load(byte[] serverData, string? buildplateMetadataString, ILogger logger)
     {
+        var metadata = LoadMetadata(buildplateMetadataString, logger);
+        if (metadata is null)
+        {
+            return null;
+        }
+
+        return new WorldData(serverData, metadata.Size, metadata.Offset, metadata.Night);
+    }
+
+    public static BuildplateMetadataV1? LoadMetadata(string? metadataJson, ILogger logger)
+    {
         int size;
         int offset;
         bool night;
 
         try
         {
-            if (buildplateMetadataString is null)
+            if (metadataJson is null)
             {
-                logger.Warning($"World file does not contain {MetadataFileName}, using default values");
+                LogNoBuildplateMetadataFile(logger);
                 size = 16;
                 offset = 63;
                 night = false;
             }
             else
             {
-                var buildplateMetadataVersion = Json.Deserialize<BuildplateMetadataVersion>(buildplateMetadataString);
+                var buildplateMetadataVersion = JsonSerializer.Deserialize(metadataJson, AppJsonContext.Default.BuildplateMetadataVersion);
 
                 if (buildplateMetadataVersion is null)
                 {
-                    logger.Error("Invalid buildplate metadata");
+                    LogInvalidBuildplateMetadata(logger);
                     return null;
                 }
 
@@ -151,11 +163,11 @@ public sealed record WorldData(
                 {
                     case 1:
                         {
-                            var buildplateMetadata = Json.Deserialize<BuildplateMetadataV1>(buildplateMetadataString);
+                            var buildplateMetadata = JsonSerializer.Deserialize(metadataJson, AppJsonContext.Default.BuildplateMetadataV1);
 
                             if (buildplateMetadata is null)
                             {
-                                logger.Error("Invalid buildplate metadata");
+                                LogInvalidBuildplateMetadata(logger);
                                 return null;
                             }
 
@@ -167,35 +179,33 @@ public sealed record WorldData(
                         break;
                     default:
                         {
-                            logger.Error($"Unsupported buildplate metadata version {buildplateMetadataVersion.Version}");
+                            LogUnsupportedBuildplateMetadataVersion(logger, buildplateMetadataVersion.Version);
                             return null;
                         }
                 }
             }
         }
-        catch (Exception ex)
+        catch (Exception exception)
         {
-            logger.Error($"Could not read buildplate metadata file: {ex}");
+            LogBuildplateMetadataReadError(logger, exception);
             return null;
         }
 
-        if (size != 8 && size != 16 && size != 32)
+        if (size is not 8 and not 16 and not 32)
         {
-            logger.Error($"Invalid buildplate size {size}, must be on of: 8, 16, 32");
+            LogInvalidBuildplateSite(logger, size);
             return null;
         }
 
-        return new WorldData(serverData, size, offset, night);
+        return new BuildplateMetadataV1(size, offset, night);
     }
 
-    public static void WriteMetadata(Stream stream, BuildplateMetadataV1 data, JsonSerializerOptions? options = null)
+    public static void WriteMetadata(Stream stream, BuildplateMetadataV1 data)
     {
         var versionData = new BuildplateMetadataVersion(1);
 
-        var versionNode = JsonSerializer.SerializeToNode(versionData, options) as JsonObject;
-        var v1Node = JsonSerializer.SerializeToNode(data, options) as JsonObject;
-
-        if (versionNode is null || v1Node is null)
+        if (JsonSerializer.SerializeToNode(versionData, AppJsonContext.Default.BuildplateMetadataVersion) is not JsonObject versionNode ||
+            JsonSerializer.SerializeToNode(data, AppJsonContext.Default.BuildplateMetadataV1) is not JsonObject v1Node)
         {
             throw new InvalidOperationException("Failed to serialize metadata records to JsonNodes.");
         }
@@ -213,6 +223,34 @@ public sealed record WorldData(
         }
 
         using var writer = new Utf8JsonWriter(stream);
-        combinedObject.WriteTo(writer, options);
+        combinedObject.WriteTo(writer);
+    }
+
+    // LoggerMessage doesn't work in records???
+    internal static partial class Logs
+    {
+        [LoggerMessage(Level = LogLevel.Error, Message = "Could not read world file")]
+        internal static partial void LogWorldFileReadError(ILogger logger, Exception exception);
+
+        [LoggerMessage(Level = LogLevel.Error, Message = "World file is missing file '{FilePath}'")]
+        internal static partial void LogWorldFileFileMissing(ILogger logger, string FilePath);
+
+        [LoggerMessage(Level = LogLevel.Error, Message = "Could not prepare server data")]
+        internal static partial void LogServerDataPrepareError(ILogger logger, Exception exception);
+
+        [LoggerMessage(Level = LogLevel.Warning, Message = $"World file does not contain {MetadataFileName}, using default values")]
+        internal static partial void LogNoBuildplateMetadataFile(ILogger logger);
+
+        [LoggerMessage(Level = LogLevel.Error, Message = "Invalid buildplate metadata")]
+        internal static partial void LogInvalidBuildplateMetadata(ILogger logger);
+
+        [LoggerMessage(Level = LogLevel.Error, Message = "Unsupported buildplate metadata version {Version}")]
+        internal static partial void LogUnsupportedBuildplateMetadataVersion(ILogger logger, int Version);
+
+        [LoggerMessage(Level = LogLevel.Error, Message = "Could not read buildplate metadata file")]
+        internal static partial void LogBuildplateMetadataReadError(ILogger logger, Exception exception);
+
+        [LoggerMessage(Level = LogLevel.Error, Message = "Invalid buildplate size {Size}, must be on of: 8, 16, 32")]
+        internal static partial void LogInvalidBuildplateSite(ILogger logger, int Size);
     }
 }

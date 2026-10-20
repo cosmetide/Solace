@@ -1,52 +1,58 @@
-﻿using Serilog;
-using Solace.Common;
+using System.Collections.Concurrent;
+using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Solace.Common.Utils;
 using Solace.EventBus.Client;
 
 namespace Solace.TappablesGenerator;
 
-public sealed class ActiveTiles
+internal sealed partial class ActiveTiles : IAsyncDisposable
 {
-    private static readonly int ACTIVE_TILE_RADIUS = 3;
-    private static readonly long ACTIVE_TILE_EXPIRY_TIME = 2 * 60 * 1000;
+    private const int ACTIVE_TILE_RADIUS = 4;
+    private static readonly TimeSpan ACTIVE_TILE_EXPIRY_TIME = TimeSpan.FromMinutes(2);
 
-    private readonly Dictionary<int, ActiveTile> _activeTiles = [];
-    private readonly IActiveTileListener _activeTileListener;
+    private readonly ConcurrentDictionary<int, ActiveTile> _activeTiles = [];
+    private readonly Spawner _spawner;
+    private RequestHandler? _requestHandler;
 
-    private ActiveTiles(IActiveTileListener activeTileListener)
+    private readonly ILogger<ActiveTiles> _logger;
+
+    public ActiveTiles(Spawner spawner, ILogger<ActiveTiles> logger)
     {
-        _activeTileListener = activeTileListener;
+        _spawner = spawner;
+        _logger = logger;
     }
 
-    public static async Task<ActiveTiles> CreateAsync(EventBusClient eventBusClient, IActiveTileListener activeTileListener)
-    {
-        var tiles = new ActiveTiles(activeTileListener);
-
-        await eventBusClient.AddRequestHandlerAsync("tappables", new RequestHandlerLister(async request =>
+    internal async Task InitializeAsync(EventBusClient eventBusClient)
+        => _requestHandler = await eventBusClient.AddRequestHandlerAsync("tappables",
+        async (request, cancellationToken) =>
         {
-            if (request.Type == "activeTile")
+            if (request.Type is "activeTile")
             {
                 ActiveTileNotification activeTileNotification;
                 try
                 {
-                    activeTileNotification = Json.Deserialize<ActiveTileNotification>(request.Data)!;
+                    activeTileNotification = JsonSerializer.Deserialize((string)request.Data.Value!, AppJsonContext.Default.ActiveTileNotification)!;
                 }
-                catch (Exception ex)
+                catch (Exception exception)
                 {
-                    Log.Error($"Could not deserialise active tile notification event: {ex}");
+                    LogCouldNotDeserialiseActiveTileNotificationEvent(exception);
                     return null;
                 }
 
-                long currentTime = U.CurrentTimeMillis();
-                tiles.PruneActiveTiles(currentTime);
+                var currentTime = DateTimeOffset.UtcNow;
+                PruneActiveTiles(currentTime);
 
-                int sideLength = (ACTIVE_TILE_RADIUS * 2) + 1;
+                var sideLength = (ACTIVE_TILE_RADIUS * 2) + 1;
                 var newActiveTiles = new List<ActiveTile>(sideLength * sideLength);
-                for (int tileX = activeTileNotification.X - ACTIVE_TILE_RADIUS; tileX < activeTileNotification.X + ACTIVE_TILE_RADIUS + 1; tileX++)
+                var allRequestedTiles = new List<(int X, int Y)>(sideLength * sideLength);
+
+                for (var tileX = activeTileNotification.X - ACTIVE_TILE_RADIUS; tileX <= activeTileNotification.X + ACTIVE_TILE_RADIUS; tileX++)
                 {
-                    for (int tileY = activeTileNotification.Y - ACTIVE_TILE_RADIUS; tileY < activeTileNotification.Y + ACTIVE_TILE_RADIUS + 1; tileY++)
+                    for (var tileY = activeTileNotification.Y - ACTIVE_TILE_RADIUS; tileY <= activeTileNotification.Y + ACTIVE_TILE_RADIUS; tileY++)
                     {
-                        ActiveTile activeTile = tiles.MarkTileActive(tileX, tileY, currentTime);
+                        var activeTile = MarkTileActive(tileX, tileY, currentTime);
+                        allRequestedTiles.Add((tileX, tileY));
 
                         if (activeTile.LatestActiveTime == activeTile.FirstActiveTime) // indicating that the tile is newly-active
                         {
@@ -57,35 +63,42 @@ public sealed class ActiveTiles
 
                 if (newActiveTiles.Count > 0)
                 {
-                    await activeTileListener.Active(newActiveTiles);
+                    _spawner.SpawnTilesSync(newActiveTiles);
                 }
 
-                return string.Empty;
+                var (tappables, encounters) = _spawner.GetActiveLocationsForTiles(allRequestedTiles, currentTime);
+                return JsonSerializer.Serialize(new ActiveTileResponse(tappables, encounters), AppJsonContext.Default.ActiveTileResponse);
             }
             else
             {
                 return null;
             }
         },
-        async () =>
+        async exception =>
         {
-            Log.Error("Event bus subscriber error");
-            Log.CloseAndFlush();
-            Environment.Exit(1);
-        }));
+            LogEventBusSubscriberError(exception);
+            Console.Error.WriteLine(exception);
+            Console.Error.Flush();
+            Environment.Exit(333);
+        });
 
-        return tiles;
-    }
-
-    public IEnumerable<ActiveTile> GetActiveTiles(long currentTime)
+    public IEnumerable<ActiveTile> GetActiveTiles(DateTimeOffset currentTime)
         => _activeTiles.Values.Where(activeTile => currentTime < activeTile.LatestActiveTime + ACTIVE_TILE_EXPIRY_TIME);
 
-    private ActiveTile MarkTileActive(int tileX, int tileY, long currentTime)
+    public async ValueTask DisposeAsync()
     {
-        var activeTile = _activeTiles.GetValueOrDefault((tileX << 16) + tileY);
+        if (_requestHandler is not null)
+        {
+            await _requestHandler.DisposeAsync();
+        }
+    }
+
+    private ActiveTile MarkTileActive(int tileX, int tileY, DateTimeOffset currentTime)
+    {
+        var activeTile = _activeTiles.GetValueOrDefault(TileUtils.XYToInt(tileX, tileY));
         if (activeTile is null)
         {
-            Log.Information($"Tile {tileX},{tileY} is becoming active");
+            LogTileIsBecomingActive(tileX, tileY);
             activeTile = new ActiveTile(tileX, tileY, currentTime, currentTime);
         }
         else
@@ -93,68 +106,65 @@ public sealed class ActiveTiles
             activeTile = new ActiveTile(tileX, tileY, activeTile.FirstActiveTime, currentTime);
         }
 
-        _activeTiles[(tileX << 16) + tileY] = activeTile;
+        _activeTiles[TileUtils.XYToInt(tileX, tileY)] = activeTile;
 
         return activeTile;
     }
 
-    private void PruneActiveTiles(long currentTime)
+    private void PruneActiveTiles(DateTimeOffset currentTime)
     {
         List<KeyValuePair<int, ActiveTile>> entriesToRemove = [];
 
         foreach (var item in _activeTiles)
         {
-            ActiveTile activeTile = item.Value;
+            var activeTile = item.Value;
             if (activeTile.LatestActiveTime + ACTIVE_TILE_EXPIRY_TIME <= currentTime)
             {
-                Log.Information($"Tile {activeTile.TileX},{activeTile.TileY} is inactive");
+                LogTileIsInactive(activeTile.TileX, activeTile.TileY);
                 entriesToRemove.Add(item);
             }
         }
 
         foreach (var item in entriesToRemove)
         {
-            _activeTiles.Remove(item.Key);
+            _activeTiles.TryRemove(item.Key, out _);
         }
 
-        _activeTileListener.Inactive(entriesToRemove.Select(item => item.Value));
+        if (entriesToRemove.Count > 0)
+        {
+            _spawner.RemoveInactiveTilesAsync(entriesToRemove.Select(item => item.Value))
+                .Forget();
+        }
     }
 
-    public record ActiveTile(
+    internal sealed record ActiveTile(
         int TileX,
         int TileY,
-        long FirstActiveTime,
-        long LatestActiveTime
+        DateTimeOffset FirstActiveTime,
+        DateTimeOffset LatestActiveTime
     );
 
-    private sealed record ActiveTileNotification(
+    internal sealed record ActiveTileNotification(
         int X,
         int Y,
         string PlayerId
     );
 
-    public interface IActiveTileListener
-    {
-        Task Active(IEnumerable<ActiveTile> activeTiles);
+    internal sealed record ActiveTileResponse(
+        List<Tappable> Tappables,
+        List<Encounter> Encounters
+    );
 
-        Task Inactive(IEnumerable<ActiveTile> activeTiles);
-    }
+    [LoggerMessage(Level = LogLevel.Error, Message = "Could not deserialise active tile notification event")]
+    private partial void LogCouldNotDeserialiseActiveTileNotificationEvent(Exception exception);
 
-    public class ActiveTileListener : IActiveTileListener
-    {
-        public Func<IEnumerable<ActiveTile>, Task>? OnActive;
-        public Func<IEnumerable<ActiveTile>, Task>? OnInactive;
+    [LoggerMessage(Level = LogLevel.Error, Message = "Event bus subscriber error")]
+    private partial void LogEventBusSubscriberError(Exception? exception);
 
-        public ActiveTileListener(Func<IEnumerable<ActiveTile>, Task>? active, Func<IEnumerable<ActiveTile>, Task>? inactive)
-        {
-            OnActive = active;
-            OnInactive = inactive;
-        }
+    [LoggerMessage(Level = LogLevel.Information, Message = "Tile ({PosX}, {PosY}) is becoming active")]
+    private partial void LogTileIsBecomingActive(int PosX, int PosY);
 
-        public Task Active(IEnumerable<ActiveTile> activeTiles)
-            => OnActive?.Invoke(activeTiles) ?? Task.CompletedTask;
-
-        public Task Inactive(IEnumerable<ActiveTile> activeTiles)
-            => OnInactive?.Invoke(activeTiles) ?? Task.CompletedTask;
-    }
+    [LoggerMessage(Level = LogLevel.Information, Message = "Tile ({PosX}, {PosY}) is inactive")]
+    private partial void LogTileIsInactive(int PosX, int PosY);
 }
+

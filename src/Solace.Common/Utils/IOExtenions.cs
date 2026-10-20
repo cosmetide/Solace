@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 using System.IO.Compression;
 using System.Text.RegularExpressions;
+using BitcoderCZ.IO;
 
 namespace Solace.Common.Utils;
 
@@ -10,7 +11,7 @@ public static class IOExtenions
 {
     extension(ZipArchiveEntry entry)
     {
-        public bool IsDirectory => entry.FullName.EndsWith('/') || entry.FullName.EndsWith('\\') || entry.Name == string.Empty;
+        public bool IsDirectory => entry.FullName.EndsWith('/') || entry.FullName.EndsWith('\\') || entry.Name.Length is 0;
     }
 
     extension(File)
@@ -35,16 +36,16 @@ public static class IOExtenions
             }
 
             const string VersionPlaceholder = "___VERSION_PLACEHOLDER___";
-            string templateWithToken = template.Replace("{{version}}", VersionPlaceholder);
-            string escapedTemplate = Regex.Escape(templateWithToken);
+            var templateWithToken = template.Replace("{{version}}", VersionPlaceholder, StringComparison.Ordinal);
+            var escapedTemplate = Regex.Escape(templateWithToken);
 
-            string pattern = "^" + escapedTemplate.Replace(VersionPlaceholder, @"(?<version>\d+(?:\.\d+)+)") + "$";
+            var pattern = "^" + escapedTemplate.Replace(VersionPlaceholder, @"(?<version>\d+(?:\.\d+)+)", StringComparison.Ordinal) + "$";
 
-            var regex = new Regex(pattern, RegexOptions.CultureInvariant);
+            var regex = new Regex(pattern, RegexOptions.CultureInvariant, matchTimeout: TimeSpan.FromMilliseconds(200));
 
             var bestMatch = Directory.EnumerateFiles(directory)
                 .Select(Path.GetFileName)
-                .OfType<string>()
+                .WhereNotNull()
                 .Select(name => new { Name = name, Match = regex.Match(name) })
                 .Where(x => x.Match.Success)
                 .Select(x =>
@@ -78,35 +79,7 @@ public static class IOExtenions
         }
     }
 
-    extension(Path)
-    {
-        public static string GetUniqueFilePath(string filePath)
-        {
-            if (!File.Exists(filePath))
-            {
-                return filePath;
-            }
-
-            var directory = Path.GetDirectoryName(filePath)!;
-            var fileNameWithoutExtension = Path.GetFileNameWithoutExtension(filePath);
-            var extension = Path.GetExtension(filePath);
-
-            int count = 1;
-            string uniquePath;
-
-            do
-            {
-                var newFileName = $"{fileNameWithoutExtension} {count}{extension}";
-                uniquePath = Path.Combine(directory, newFileName);
-                count++;
-            }
-            while (File.Exists(uniquePath));
-
-            return uniquePath;
-        }
-    }
-
-    extension(FileInfo file)
+    extension(AbsoluteFile file)
     {
         public long SafeLength
         {
@@ -121,9 +94,6 @@ public static class IOExtenions
             }
         }
 
-        public FileStream OpenWriteNew()
-           => File.Open(file.FullName, FileMode.Create, FileAccess.Write, FileShare.Read);
-
         public void SafeDelete()
         {
             try
@@ -132,7 +102,6 @@ public static class IOExtenions
             }
             catch (DirectoryNotFoundException)
             {
-
             }
         }
 
@@ -156,9 +125,9 @@ public static class IOExtenions
         }
     }
 
-    extension(DirectoryInfo directory)
+    extension(IDirectory directory)
     {
-        public long Length => directory.EnumerateFiles("*", SearchOption.AllDirectories).Sum(file => file.Length);
+        public long Length => directory.EnumerateFiles(SearchOption.AllDirectories).Sum(file => file.Length);
 
         public long SafeLength
         {
@@ -200,17 +169,6 @@ public static class IOExtenions
             }
 
             return true;
-        }
-
-        public void SafeDelete()
-        {
-            try
-            {
-                directory.Delete();
-            }
-            catch (DirectoryNotFoundException)
-            {
-            }
         }
 
         public void SafeDelete(bool recursive)

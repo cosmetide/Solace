@@ -8,153 +8,64 @@ CYN='\033[1;36m'
 BLU='\033[1;34m'
 RST='\033[0m'
 
-REMOTE_URL="https://raw.githubusercontent.com/Earth-Restored/Solace/refs/heads/main/distros/Termux.sh"
-SELF_PATH="$(realpath "$0")"
-GITHUB_REPO="Earth-Restored/Solace"
-GITHUB_URL="https://github.com/$GITHUB_REPO.git"
+GITHUB_REPO="${SOLACE_REPO:-Earth-Restored/Solace}"
+GITHUB_BRANCH="${SOLACE_BRANCH:-aspire}"
+REMOTE_URL="https://raw.githubusercontent.com/$GITHUB_REPO/refs/heads/$GITHUB_BRANCH/distros/Termux.sh"
+SELF_PATH="$(realpath "$0" 2>/dev/null || echo "$0")"
+TERMUX_PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+LAUNCHER_PATH=""
+case "$SELF_PATH" in
+    "$TERMUX_PREFIX/bin/"*) LAUNCHER_PATH="$SELF_PATH" ;;
+esac
 
-RELEASE_ARCH="linux-arm64"
+PROOT_ROOTFS="$TERMUX_PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs"
+UBUNTU_HOME="$PROOT_ROOTFS/root"
+SOLACE_DIR="$UBUNTU_HOME/Solace"
+CONFIG_DIR="$UBUNTU_HOME/.config/solace"
+ENV_FILE="$CONFIG_DIR/termux.env"
+SETTINGS_FILE="$CONFIG_DIR/termux-settings.json"
+LOG_DIR="$CONFIG_DIR/logs"
+STARTUP_JSON="$LOG_DIR/startup.json"
+STARTUP_LOG="$LOG_DIR/startup.log"
+PID_FILE="$CONFIG_DIR/server.pid"
+DASHBOARD_PORT="${SOLACE_DASHBOARD_PORT:-8888}"
+DASHBOARD_FORWARD_PID="$CONFIG_DIR/dashboard-forward.pid"
+DASHBOARD_SOCAT_PID="$CONFIG_DIR/dashboard-socat.pid"
+ADMIN_URL="http://127.0.0.1:5000"
 
-# ─── SELF-UPDATE ──────────────────────────────────────────
+TERMUX_PGDATA="$TERMUX_PREFIX/var/lib/postgresql"
 
-echo "Checking for updates..."
+UBUNTU_SOLACE_DIR="/root/Solace"
+UBUNTU_CONFIG_DIR="/root/.config/solace"
+UBUNTU_ENV_FILE="/root/.config/solace/termux.env"
+UBUNTU_STARTUP_JSON="/root/.config/solace/logs/startup.json"
+UBUNTU_APP_HOST="/root/Solace/src/Solace.AppHost/Solace.AppHost.csproj"
+UBUNTU_DOTNET_PRELUDE='export DOTNET_ROOT="$HOME/.dotnet"
+export PATH="$HOME/.dotnet:$HOME/.dotnet/tools:$PATH"
+export DOTNET_CLI_TELEMETRY_OPTOUT=1
+export DOTNET_NOLOGO=1'
 
 update_self() {
+    [ -n "$LAUNCHER_PATH" ] || return
     command -v curl >/dev/null 2>&1 || return
-    TMP_PATH="$(mktemp /data/data/com.termux/files/usr/tmp/.earth_update_XXXXXX)"
-    curl -fsSL --max-time 5 "$REMOTE_URL" -o "$TMP_PATH" 2>/dev/null
+    TMP_PATH="$(mktemp "$TERMUX_PREFIX/tmp/.solace_update_XXXXXX" 2>/dev/null || mktemp)"
+    curl -fsSL --max-time 10 "$REMOTE_URL" -o "$TMP_PATH" 2>/dev/null || { rm -f "$TMP_PATH"; return; }
     if [ -s "$TMP_PATH" ]; then
         chmod +x "$TMP_PATH"
         if ! cmp -s "$TMP_PATH" "$SELF_PATH"; then
             if command mv -f "$TMP_PATH" "$SELF_PATH" 2>/dev/null; then
                 echo "[Solace] updated"
             else
-                echo "[Solace] updating at $SELF_PATH requires sudo..."
-                sudo mv -f "$TMP_PATH" "$SELF_PATH" || { echo "[Solace] update failed"; rm -f "$TMP_PATH"; return; }
-                echo "[Solace] updated"
+                rm -f "$TMP_PATH"
+                return
             fi
-            if [ -n "$PROOT" ]; then
-                echo "Please exit proot environment and run the command again."
-                exit 0
-            else
-                echo "[Solace] restarting..."
-                exec "$SELF_PATH" "$@"
-            fi
-        else
-            rm -f "$TMP_PATH"
+            exec "$SELF_PATH" "$@"
         fi
-    else
-        rm -f "$TMP_PATH"
     fi
+    rm -f "$TMP_PATH"
 }
 
-update_self "$@"
-
-# ─── EULA ─────────────────────────────────────────────────
-
-if [ "$1" = "eula" ]; then
-    EULA_ACTION="$2"
-    TMP_SCRIPT=$(mktemp)
-    cat > "$TMP_SCRIPT" << 'EOF'
-#!/usr/bin/env bash
-export TERM=xterm
-EULA_FILE="$HOME/Solace/staticdata/server_template_dir/eula.txt"
-if [ "$EULA_ACTION" = "--delete" ]; then
-    rm -f "$EULA_FILE"
-    echo "[Solace]: The eula file has been deleted."
-    exit 0
-fi
-if [ ! -f "$EULA_FILE" ]; then
-    clear
-    echo "======================================="
-    echo "        MINECRAFT SERVER EULA"
-    echo "======================================="
-    echo ""
-    echo "[WARNING]: Agreeing to the EULA"
-    echo "without starting the server first will"
-    echo "NOT pre-download the files needed"
-    echo "for Buildplate Launcher."
-    echo ""
-    echo "Please start the server first from"
-    echo "the admin panel."
-    echo ""
-    echo "======================================="
-    echo ""
-    printf "Press ENTER to exit..."
-    read -r
-    exit 1
-fi
-if grep -q "eula=true" "$EULA_FILE"; then
-    echo "[Solace]: EULA already accepted."
-    exit 0
-fi
-clear
-echo "======================================="
-echo "        MINECRAFT SERVER EULA"
-echo "======================================="
-echo ""
-echo "Before starting the server, you must"
-echo "accept the End User License Agreement."
-echo ""
-echo "Read it here:"
-echo "https://aka.ms/MinecraftEULA"
-echo ""
-echo "Type YES to agree."
-echo ""
-echo "======================================="
-echo ""
-printf "Accept EULA > "
-read CONFIRM < /dev/tty
-CONFIRM="$(echo "$CONFIRM" | tr -d '\r\n')"
-if [ "$CONFIRM" = "YES" ]; then
-    if grep -q "eula=false" "$EULA_FILE"; then
-        sed -i 's/eula=false/eula=true/g' "$EULA_FILE"
-    else
-        echo "eula=true" >> "$EULA_FILE"
-    fi
-    echo ""
-    echo "[Solace]: EULA accepted."
-else
-    echo ""
-    echo "[Solace]: EULA not accepted."
-fi
-EOF
-    chmod +x "$TMP_SCRIPT"
-    proot-distro login ubuntu --shared-tmp -- env EULA_ACTION="$EULA_ACTION" bash "$TMP_SCRIPT" 2>/dev/null
-    rm -f "$TMP_SCRIPT"
-    exit 0
-fi
-
-# ─── UNINSTALL ────────────────────────────────────────────
-
-if [ "$1" = "uninstall" ]; then
-    echo "[Solace] Stopping server..."
-    proot-distro login ubuntu -- bash -c '
-        PID_FILE=~/Solace/server.pid
-        if [ -f "$PID_FILE" ]; then
-            PID=$(cat "$PID_FILE")
-            PGID=$(ps -o pgid= "$PID" 2>/dev/null | tr -d " ")
-            kill -- -"$PGID" 2>/dev/null
-            kill "$PID" 2>/dev/null
-        fi
-        pkill -f run_launcher.ps1 2>/dev/null
-        fuser -k 5000/tcp 2>/dev/null
-        rm -f "$PID_FILE"
-    ' 2>/dev/null
-
-    echo "[Solace] Removing Solace files..."
-    proot-distro login ubuntu -- rm -rf ~/Solace 2>/dev/null
-
-    echo "[Solace] Removing earth command..."
-    sudo rm -f "$SELF_PATH" 2>/dev/null || rm -f "$SELF_PATH"
-
-    echo "[Solace] Solace has been uninstalled."
-    exit 0
-fi
-
-# ─── HELP ─────────────────────────────────────────────────
-
-if [ "$1" = "help" ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+show_help() {
     echo -e "${BLU}"
     echo "   _____       __"
     echo "  / ___/____  / /___ _________"
@@ -165,474 +76,28 @@ if [ "$1" = "help" ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "Usage: earth [COMMAND]"
     echo ""
     echo "Commands:"
-    echo "  (no args)    Open the TUI menu"
-    echo "  help         Show this help message"
-    echo "  eula         Accept the Minecraft EULA"
-    echo "  eula --delete  Delete the EULA file"
-    echo "  uninstall    Completely remove Solace"
+    echo "  (no args)      Open the TUI menu"
+    echo "  help           Show this help message"
+    echo "  start          Start the server in the background"
+    echo "  stop           Stop the server"
+    echo "  status         Show the server status"
+    echo "  portal         Open the Solace web portal in a browser"
+    echo "  aspire         Open the Aspire panel in a browser"
+    echo "  logs [NAME]    Show logs (optionally for one service)"
+    echo "  eula           Accept the Minecraft EULA"
+    echo "  eula --delete  Revoke the Minecraft EULA acceptance"
+    echo "  uninstall      Completely remove Solace"
     echo ""
     echo "Platform: Termux (Android) - proot-distro + Ubuntu"
+    echo "Server:   Aspire AppHost / Web Portal"
+    echo "Dashboard: http://<LAN-IP>:8888 (current login link: earth status)"
     echo ""
     exit 0
-fi
-
-# ─── MAIN DASHBOARD (runs inside proot-distro) ────────────
-
-proot-distro login ubuntu -- env SELF_PATH="$SELF_PATH" bash << 'DASHBOARD'
-#!/usr/bin/env bash
-
-RED='\033[1;31m'
-GRN='\033[1;32m'
-YLW='\033[1;33m'
-ORG='\033[38;5;208m'
-CYN='\033[1;36m'
-BLU='\033[1;34m'
-RST='\033[0m'
-
-GITHUB_REPO="Earth-Restored/Solace"
-GITHUB_URL="https://github.com/$GITHUB_REPO.git"
-
-DB=~/Solace/nohup.log
-PID_FILE=~/Solace/server.pid
-TIME_FILE=~/Solace/server.start
-SOLACE_DIR=~/Solace
-EULA_FILE="$SOLACE_DIR/staticdata/server_template_dir/eula.txt"
-RESOURCEPACK="$SOLACE_DIR/staticdata/resourcepacks/vanilla.zip"
-SETTINGS_FILE="$SOLACE_DIR/settings.json"
-VERSION_FILE="$SOLACE_DIR/version.txt"
-RELEASE_ARCH="linux-arm64"
-
-mkdir -p "$SOLACE_DIR"
-rm -rf ~/Solace_update_* ~/Solace-*.zip 2>/dev/null || true
-
-# ─── PROOT UTILITY FUNCTIONS ────────────────────────
-
-load_settings() {
-    INSTALL_MODE="prebuilt"
-    INSTALL_BRANCH="main"
-    CURRENT_VERSION="unknown"
-    if [ -f "$SETTINGS_FILE" ]; then
-        INSTALL_MODE=$(grep -o '"installMode": *"[^"]*"' "$SETTINGS_FILE" 2>/dev/null | cut -d'"' -f4)
-        INSTALL_BRANCH=$(grep -o '"branch": *"[^"]*"' "$SETTINGS_FILE" 2>/dev/null | cut -d'"' -f4)
-        CURRENT_VERSION=$(grep -o '"version": *"[^"]*"' "$SETTINGS_FILE" 2>/dev/null | cut -d'"' -f4)
-    fi
-    [ -z "$INSTALL_MODE" ] && INSTALL_MODE="prebuilt"
-    [ -z "$INSTALL_BRANCH" ] && INSTALL_BRANCH="main"
-    [ -z "$CURRENT_VERSION" ] && CURRENT_VERSION="unknown"
-    if [ -f "$VERSION_FILE" ]; then
-        CURRENT_VERSION=$(cat "$VERSION_FILE")
-    fi
 }
 
-is_running() {
-    curl -s --max-time 1 http://127.0.0.1:5000 | grep -q .
+pause() {
+    read -r _ < /dev/tty
 }
-
-is_process_alive() {
-    if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE")
-        kill -0 "$PID" 2>/dev/null && return 0
-    fi
-    pgrep -f run_launcher.ps1 >/dev/null 2>&1
-}
-
-get_pid() {
-    [ -f "$PID_FILE" ] && cat "$PID_FILE"
-}
-
-check_deps() {
-    local missing=false
-    for cmd in java pwsh fzf; do
-        if ! command -v "$cmd" >/dev/null 2>&1; then
-            echo -e "  ${RED}✗${RST} $cmd (inside Ubuntu)"
-            missing=true
-        fi
-    done
-    $missing
-}
-
-# ─── ACTIONS ──────────────────────────────────────
-
-start_server() {
-    if is_process_alive; then
-        return
-    fi
-
-    cd "$SOLACE_DIR" || return
-
-    export DOTNET_ROOT=$HOME/.dotnet
-    export PATH=$PATH:$HOME/.dotnet:$HOME/.dotnet/tools
-    export COMPlus_gcServer=0
-    export COMPlus_gcConcurrent=1
-    export DOTNET_GCHeapHardLimit=268435456
-
-    if check_deps; then
-        clear
-        echo -e "${RED}Missing dependencies inside Ubuntu!${RST}"
-        echo "Run the installer again."
-        printf "Press ENTER to return..."
-        read -r
-        return
-    fi
-
-    nohup setsid pwsh run_launcher.ps1 > "$DB" 2>&1 < /dev/null &
-    PID=$!
-    disown
-
-    echo "$PID" > "$PID_FILE"
-    date +%s > "$TIME_FILE"
-}
-
-stop_server() {
-    if ! is_process_alive; then
-        return
-    fi
-
-    if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE")
-        PGID=$(ps -o pgid= "$PID" 2>/dev/null | tr -d ' ')
-        kill -- -"$PGID" 2>/dev/null
-        kill "$PID" 2>/dev/null
-    fi
-
-    pkill -f run_launcher.ps1 2>/dev/null
-    fuser -k 5000/tcp 2>/dev/null
-    rm -f "$PID_FILE" "$TIME_FILE"
-    sleep 2
-}
-
-toggle_server() {
-    if is_process_alive; then
-        CH=$(printf "Yes\nNo" | fzf \
-            --height=20% --reverse --border --prompt="Stop server? > ")
-        [ "$CH" = "Yes" ] && stop_server
-    else
-        start_server
-    fi
-}
-
-first_start_checks() {
-    if [ ! -f "$RESOURCEPACK" ]; then
-        clear
-        echo "======================================="
-        echo "         RESOURCE PACK REQUIRED"
-        echo "======================================="
-        echo ""
-        echo "It seems that the resource packs"
-        echo "have not been installed yet."
-        echo ""
-        echo "Please refer to the Discord server"
-        echo "for the commands needed to download"
-        echo "the required resource packs."
-        echo ""
-        printf "Back\n" | fzf --height=15% --reverse --border --prompt="Resource Packs > " >/dev/null
-        return 1
-    fi
-
-    if [ ! -f "$EULA_FILE" ]; then
-        clear; show_banner
-        section_title "FIRST TIME SETUP"
-        echo ""
-        echo "  Please follow steps 4-7 in the manual"
-        echo "  server setup instructions."
-        echo ""
-        echo "  Read the full guide:"
-        echo "  https://github.com/Earth-Restored/Solace/blob/main/INSTALLATION.md"
-        echo ""
-        echo "  If you lose access to your admin account,"
-        echo "  you can reset it in:"
-        echo "  Settings → Reset Account Database"
-        echo ""
-        printf "Continue\n" | fzf --height=15% --reverse --border --prompt="Setup > " >/dev/null
-    fi
-
-    return 0
-}
-
-# ─── EULA CONFIRMATION ─────────────────────────
-
-eula_confirmation_loop() {
-    grep -q "eula=true" "$EULA_FILE" 2>/dev/null && return 0
-    [ ! -f "$EULA_FILE" ] && return 0
-
-    while true; do
-        clear; show_banner
-        section_title "EULA CONFIRMATION"
-        echo ""
-        echo "  Before starting the server, you must accept the"
-        echo "  End User License Agreement."
-        echo ""
-        echo "  Read it here:"
-        echo "  https://aka.ms/MinecraftEULA"
-        echo ""
-        CHOICE=$(printf "Yes, I agree\nNo, I deny" | fzf \
-            --height=20% --reverse --border --prompt="Accept EULA? > ")
-
-        if [ "$CHOICE" = "Yes, I agree" ]; then
-            sed -i 's/eula=false/eula=true/g' "$EULA_FILE" || echo "eula=true" >> "$EULA_FILE"
-            echo ""; echo "[Solace] EULA accepted."; sleep 1
-            return 0
-        fi
-
-        clear; show_banner
-        section_title "ARE YOU SURE?"
-        echo ""
-        echo "  You must accept the EULA to run the server."
-        echo ""
-        CHOICE2=$(printf "Go back\nYes, I deny" | fzf \
-            --height=20% --reverse --border --prompt="Confirm? > ")
-        [ "$CHOICE2" = "Yes, I deny" ] && return 1
-    done
-}
-
-# ─── PROCESS VIEWER ──────────────────────────────
-
-process_viewer() {
-while true; do
-    clear; show_banner
-    section_title "PROCESS EXPLORER"
-    PID=$(get_pid)
-
-    if is_running; then
-        echo -e "  ${GRN}[RUNNING]${RST}"
-    else
-        echo -e "  ${RED}[STOPPED]${RST}"
-    fi
-    echo ""
-
-    SELECT=$(
-    {
-        echo "Back to Main Menu"
-        if [ -n "$PID" ]; then
-            ps -eo pid,ppid,cmd --no-headers 2>/dev/null | \
-            grep -E "pwsh|Launcher|ApiServer|EventBus|ObjectStore|TileRenderer|BuildplateLauncher" | \
-            grep -v grep
-        fi
-    } | fzf --height=50% --reverse --border --prompt="Process > ")
-    [ -z "$SELECT" ] && continue
-    [ "$SELECT" = "Back to Main Menu" ] && return
-
-    SELPID=$(echo "$SELECT" | awk '{print $1}')
-    [[ "$SELPID" =~ ^[0-9]+$ ]] || continue
-
-    while true; do
-        clear
-        echo "==== PROCESS LOG ===="
-        echo "PID: $SELPID"
-        echo ""
-        tail -n 120 "$DB"
-        CH=$(printf "Refresh\nBack" | fzf --height=10% --reverse --border --prompt="Log > ")
-        [ "$CH" = "Back" ] && break
-    done
-done
-}
-
-# ─── UPDATE ──────────────────────────────────────
-
-update_solace() {
-    load_settings
-    if [ "$INSTALL_BRANCH" = "dev" ]; then
-        local confirm
-        confirm=$(printf "Yes, continue\nNo, cancel" | fzf --height=20% --reverse --border --prompt="Dev builds are unstable. Continue? > ")
-        [ "$confirm" != "Yes, continue" ] && return
-        echo -e "${YLW}Downloading latest developer build...${RST}"
-        force_stop_server
-        local zip_name="Solace-Dev-${RELEASE_ARCH}.zip"
-        local tmp=$(mktemp -d ~/Solace_update_XXXXXX) || return 1
-        cd "$tmp" || return 1
-        curl -L --progress-bar -o server.zip "https://github.com/$GITHUB_REPO/releases/download/dev-build/${zip_name}" && echo -e "  ${GRN}✔${RST} Download complete"
-        echo -ne "  ${BLU}>${RST} Extracting... " && unzip -o server.zip >/dev/null 2>&1 && echo -e "${GRN}done${RST}" || { echo -e "${RED}failed${RST}"; return 1; }
-        
-        find . -maxdepth 1 -not -name 'server.zip' -not -name '.' -exec mv {} "$SOLACE_DIR/" \; 2>/dev/null || true
-        chmod -R +x "$SOLACE_DIR/components/" 2>/dev/null || true
-        echo "dev-build" > "$VERSION_FILE"
-        cat > "$SETTINGS_FILE" << JSONEOF
-{
-  "installMode": "prebuilt",
-  "branch": "dev",
-  "version": "dev-build",
-  "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-JSONEOF
-        rm -rf "$tmp"
-        echo "[Solace] Update complete (dev-build)"
-        sleep 5
-    else
-        echo "[Solace] Fetching available releases..."
-        local json=$(curl -s "https://api.github.com/repos/$GITHUB_REPO/releases?per_page=100")
-        local tags=$(echo "$json" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"//;s/"//' | grep -v "^dev-build$" | grep -E '^v?0\.')
-        [ -z "$tags" ] && echo -e "${RED}[ERROR] No releases found${RST}" && sleep 2 && return 1
-        local sel=$(echo "$tags" | fzf --height=40% --reverse --border --prompt="Version > " --no-multi)
-        [ -z "$sel" ] && return
-        force_stop_server
-        local zip_name="Solace-${RELEASE_ARCH}.zip"
-        local tmp=$(mktemp -d ~/Solace_update_XXXXXX) || return 1
-        cd "$tmp" || return 1
-        echo -e "${YLW}Downloading $sel...${RST}"
-        curl -L --progress-bar -o server.zip "https://github.com/$GITHUB_REPO/releases/download/${sel}/${zip_name}" && echo -e "  ${GRN}✔${RST} Download complete"
-        echo -ne "  ${BLU}>${RST} Extracting... " && unzip -o server.zip >/dev/null 2>&1 && echo -e "${GRN}done${RST}" || { echo -e "${RED}failed${RST}"; return 1; }
-        
-        find . -maxdepth 1 -not -name 'server.zip' -not -name '.' -exec mv {} "$SOLACE_DIR/" \; 2>/dev/null || true
-        chmod -R +x "$SOLACE_DIR/components/" 2>/dev/null || true
-        cat > "$SETTINGS_FILE" << JSONEOF
-{
-  "installMode": "prebuilt",
-  "branch": "main",
-  "version": "$sel",
-  "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-JSONEOF
-        echo "$sel" > "$VERSION_FILE"
-        rm -rf "$tmp"
-        echo "[Solace] Update complete ($sel)"
-        sleep 5
-    fi
-}
-
-force_stop_server() {
-    if is_running; then
-        if [ -f "$PID_FILE" ]; then
-            PID=$(cat "$PID_FILE")
-            PGID=$(ps -o pgid= "$PID" 2>/dev/null | tr -d ' ')
-            kill -- -"$PGID" 2>/dev/null
-            kill "$PID" 2>/dev/null
-        fi
-        pkill -f run_launcher.ps1 2>/dev/null
-        fuser -k 5000/tcp 2>/dev/null
-        rm -f "$PID_FILE" "$TIME_FILE"
-        sleep 2
-    fi
-}
-
-# ─── SETTINGS ────────────────────────────────────
-
-settings_menu() {
-    while true; do
-        load_settings
-        clear; show_banner
-        section_title "SETTINGS"
-        echo ""
-        echo -e "  ${CYN}Mode:${RST}    $INSTALL_MODE"
-        echo -e "  ${CYN}Branch:${RST}  $INSTALL_BRANCH"
-        echo -e "  ${CYN}Version:${RST} $CURRENT_VERSION"
-        echo ""
-        echo "  Server: $SOLACE_DIR"
-        echo ""
-
-        CHOICE=$(printf "Switch Branch\nReset Account Database\nUninstall\nBack" | fzf \
-            --height=20% --reverse --border --prompt="Settings > " --no-multi)
-
-        case "$CHOICE" in
-            "Back") return ;;
-            "Switch Branch")
-                local sel
-                sel=$(pick_branch "Switch Branch") || break
-                force_stop_server
-                local tag
-                if [ "$sel" = "dev" ]; then
-                    tag="dev-build"
-                else
-                    echo "[Solace] Fetching releases..."
-                    local release_json
-                    release_json=$(curl -s "https://api.github.com/repos/$GITHUB_REPO/releases?per_page=100")
-                    tag=$(echo "$release_json" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"//;s/"//' | grep -v "^dev-build$" | grep -E '^v?0\.' | head -n1)
-                fi
-                [ -z "$tag" ] && echo -e "${RED}[ERROR] No release found${RST}" && sleep 2 && break
-                local prefix="Solace"
-                [ "$sel" = "dev" ] && prefix="Solace-Dev"
-                URL="https://github.com/$GITHUB_REPO/releases/download/${tag}/${prefix}-${RELEASE_ARCH}.zip"
-                TMP_DIR="$(mktemp -d ~/Solace_update_XXXXXX)"
-                cd "$TMP_DIR" || continue
-                curl -L --progress-bar -o update.zip "$URL" && echo -e "  ${GRN}✔${RST} Download complete"
-                echo -ne "  ${BLU}>${RST} Extracting... " && unzip -o update.zip >/dev/null 2>&1 && echo -e "${GRN}done${RST}" || echo -e "${RED}failed${RST}"
-                cp -r . "$SOLACE_DIR"/
-                cat > "$SETTINGS_FILE" << JSONEOF
-{
-  "installMode": "prebuilt",
-  "branch": "$sel",
-  "version": "$tag",
-  "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-JSONEOF
-                echo "$tag" > "$VERSION_FILE"
-                rm -rf "$TMP_DIR"
-                echo "[Solace] Switched to $sel ($tag)"
-                sleep 5
-                ;;
-            "Reset Account Database")
-                printf '\033[H\033[J'; show_banner
-                section_title "RESET DATABASE"
-                echo "  If you have lost access to the first account"
-                echo "  and need to start fresh, you can reset the"
-                echo "  user database."
-                echo ""
-                echo "  This will remove ALL existing accounts and"
-                echo "  allow you to register a new primary admin"
-                echo "  account."
-                echo ""
-                CONFIRM=$(printf "No, cancel\nYes, reset database" | fzf \
-                    --height=20% --reverse --border --prompt="Reset? > ")
-                if [ "$CONFIRM" = "Yes, reset database" ]; then
-                    rm -f "$SOLACE_DIR/launcher/Data/app.db"
-                    echo "[Solace] Account database reset."
-                    sleep 2
-                fi ;;
-            "Uninstall")
-                printf '\033[H\033[J'; show_banner
-                section_title "UNINSTALL"
-                echo "  This will permanently remove all Solace files."; echo ""
-                CONFIRM=$(printf "No, cancel\nYes, remove everything" | fzf --height=15% --reverse --border --prompt="Uninstall? > ")
-                if [ "$CONFIRM" = "Yes, remove everything" ]; then
-                    force_stop_server
-                    rm -rf "$SOLACE_DIR"
-                    rm -f "$SELF_PATH"
-                    echo "[Solace] Uninstalled."
-                    sleep 2
-                    exit 0
-                fi ;;
-        esac
-    done
-}
-
-# ─── INFORMATION ────────────────────────────────
-
-info_panel() {
-while true; do
-    clear; show_banner
-    section_title "INFORMATION"
-    echo
-    echo "  ── Setup Steps ──"
-    echo "  1. Start the server from the main menu"
-    echo "  2. Open the Admin Panel: http://127.0.0.1:5000"
-    echo "  3. Create an admin account"
-    echo "  4. Set the Server IP in Admin Panel → Config"
-    echo "  5. Get a MapTiler API key:"
-    echo "     https://cloud.maptiler.com/account/keys/"
-    echo "  6. Set the MapTiler key in Admin Panel → Config"
-    echo "     to render maps in-game"
-    echo ""
-    echo "  Resourcepack:"
-    echo "    $SOLACE_DIR/staticdata/resourcepacks/vanilla.zip"
-    echo ""
-    echo "  Solace Storage:"
-    echo "    Files are stored inside Ubuntu using proot-distro"
-    echo "    Enter Ubuntu with: proot-distro login ubuntu"
-    echo ""
-    echo "  APK:"
-    echo "    Patch your own Minecraft Earth app and set IP to 127.0.0.1"
-    echo ""
-    CHOICE=$(printf "Back" | fzf --height=15% --reverse --border --prompt="Info > ")
-    [ "$CHOICE" = "Back" ] && return
-done
-}
-
-open_admin_panel() {
-    termux-open-url "http://127.0.0.1:5000" 2>/dev/null || \
-    echo "Open: http://127.0.0.1:5000"
-    sleep 2
-}
-
-# ─── BANNER ──────────────────────────────────────
 
 show_banner() {
     echo ""
@@ -646,276 +111,1076 @@ show_banner() {
     echo ""
 }
 
-# ─── MAIN DASHBOARD LOOP ─────────────────────────
-
 section_title() {
     local title="$1"
     local len=${#title}
-    local total=40
+    local total=46
     local left=$(( (total - len) / 2 ))
-    printf -v pad "%*s" $left ""
-    echo -e "${BLU}========================================${RST}"
+    [ "$left" -lt 0 ] && left=0
+    printf -v pad "%*s" "$left" ""
+    echo -e "${BLU}=============================================="
     echo -e "${BLU}${pad}${title}${RST}"
-    echo -e "${BLU}========================================${RST}"
+    echo -e "${BLU}=============================================="
     echo ""
+}
+
+get_apphost_pid() {
+    [ -f "$STARTUP_JSON" ] || return
+    sed -n 's/.*"appHostPid": *\([0-9][0-9]*\).*/\1/p' "$STARTUP_JSON" | tail -n1
+}
+
+get_cli_pid() {
+    [ -f "$STARTUP_JSON" ] || return
+    sed -n 's/.*"cliPid": *\([0-9][0-9]*\).*/\1/p' "$STARTUP_JSON" | tail -n1
+}
+
+get_dashboard_url() {
+    local url="" log
+    if [ -f "$STARTUP_JSON" ]; then
+        url="$(sed -n 's/.*"dashboardUrl": *"\([^"]*\)".*/\1/p' "$STARTUP_JSON" | tail -n1 | sed 's/\\u0026/\&/g; s/\\//g')"
+    fi
+
+    if [ -z "$url" ]; then
+        log="$(ls -t "$UBUNTU_HOME"/.aspire/logs/cli_*detach-child*.log 2>/dev/null | head -n1)"
+        if [ -n "$log" ] && [ -f "$log" ]; then
+            url="$(grep -a -o 'http://localhost:[0-9][0-9]*/login?t=[a-f0-9]*' "$log" 2>/dev/null | tail -n1)"
+        fi
+    fi
+
+    [ -n "$url" ] && printf '%s\n' "$url"
+}
+
+get_public_dashboard_url() {
+    local url
+    url="$(get_dashboard_url)"
+    [ -n "$url" ] || return
+    printf '%s\n' "$url" | sed "s|^http://[^/]*|http://$PUBLIC_IP:$DASHBOARD_PORT|"
+}
+
+start_dashboard_forwarder() {
+    command -v socat >/dev/null 2>&1 || {
+        echo "[Solace] socat is not installed; the dashboard stays loopback-only."
+        echo "[Solace] Install it with: pkg install socat"
+        return 0
+    }
+
+    if [ -f "$DASHBOARD_FORWARD_PID" ]; then
+        local old
+        old="$(cat "$DASHBOARD_FORWARD_PID" 2>/dev/null)"
+        [ -n "$old" ] && kill -0 "$old" 2>/dev/null && return 0
+    fi
+
+    nohup bash "$SELF_PATH" __dashboard-forward >/dev/null 2>&1 &
+    echo "$!" > "$DASHBOARD_FORWARD_PID"
+    disown 2>/dev/null || true
+}
+
+stop_dashboard_forwarder() {
+    local pid
+    if [ -f "$DASHBOARD_FORWARD_PID" ]; then
+        pid="$(cat "$DASHBOARD_FORWARD_PID" 2>/dev/null)"
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+        rm -f "$DASHBOARD_FORWARD_PID"
+    fi
+    if [ -f "$DASHBOARD_SOCAT_PID" ]; then
+        pid="$(cat "$DASHBOARD_SOCAT_PID" 2>/dev/null)"
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+        rm -f "$DASHBOARD_SOCAT_PID"
+    fi
+}
+
+dashboard_forward_loop() {
+    local url port last_port="" socat_pid=""
+
+    while is_process_alive; do
+        url="$(get_dashboard_url)"
+        port="$(printf '%s' "$url" | sed -n 's|^http://[^:/]*:\([0-9][0-9]*\)/.*|\1|p')"
+
+        if [ -n "$port" ] && {
+            [ "$port" != "$last_port" ] ||
+            [ -z "$socat_pid" ] ||
+            ! kill -0 "$socat_pid" 2>/dev/null;
+        }; then
+            if [ -n "$socat_pid" ]; then
+                kill "$socat_pid" 2>/dev/null || true
+                wait "$socat_pid" 2>/dev/null || true
+            fi
+            socat "TCP-LISTEN:$DASHBOARD_PORT,bind=0.0.0.0,reuseaddr,fork" \
+                "TCP:127.0.0.1:$port" >/dev/null 2>&1 &
+            socat_pid=$!
+            echo "$socat_pid" > "$DASHBOARD_SOCAT_PID"
+            last_port="$port"
+        fi
+
+        sleep 5
+    done
+
+    [ -n "$socat_pid" ] && kill "$socat_pid" 2>/dev/null || true
+    rm -f "$DASHBOARD_SOCAT_PID"
+}
+
+get_cli_log() {
+    [ -f "$STARTUP_JSON" ] || return
+    sed -n 's/.*"logFile": *"\([^"]*\)".*/\1/p' "$STARTUP_JSON" | tail -n1 | sed 's/\\//g'
+}
+
+host_path() {
+    case "$1" in
+        /root/*) printf '%s%s\n' "$UBUNTU_HOME" "${1#/root}" ;;
+        /*)      printf '%s%s\n' "$PROOT_ROOTFS" "$1" ;;
+        *)       printf '%s\n' "$1" ;;
+    esac
+}
+
+is_process_alive() {
+    local pid
+    if [ -f "$PID_FILE" ]; then
+        pid="$(cat "$PID_FILE" 2>/dev/null)"
+        [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
+    fi
+    pid="$(get_apphost_pid)"
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
+    pgrep -x "Solace.AppHost" >/dev/null 2>&1 ||
+        pgrep -f '[b]in/Debug/net11.0/Solace.AppHost' >/dev/null 2>&1
+}
+
+is_running() {
+    curl -fsS --max-time 2 "http://127.0.0.1:5000/health" >/dev/null 2>&1 && return 0
+    curl -fsS --max-time 2 "http://127.0.0.1:5000/" >/dev/null 2>&1 && return 0
+    return 1
 }
 
 is_starting() {
     is_process_alive && ! is_running
 }
 
-pick_branch() {
-    local prompt="${1:-Branch}"
-    local sel=$(printf "main — Stable (recommended)\ndev — Unstable (may break your installation)" | fzf --height=20% --reverse --border --prompt="$prompt > " --no-multi)
-    [ -z "$sel" ] && return 1
-    local branch=$(echo "$sel" | sed 's/ —.*//')
-    if [ "$branch" = "dev" ]; then
-        echo -e "${YLW}⚠  Dev builds are unstable and may break your server.${RST}" >&2
-        local confirm=$(printf "No, cancel\nYes, continue anyway" | fzf --height=15% --reverse --border --prompt="Are you sure? > ")
-        [ "$confirm" != "Yes, continue anyway" ] && return 1
+load_env() {
+    if [ ! -f "$ENV_FILE" ]; then
+        echo "Solace is not configured. Run the installer again."
+        sleep 3
+        exit 1
     fi
-    echo "$branch"
+    set -a
+    . "$ENV_FILE"
+    set +a
+
+    PUBLIC_IP="${SOLACE_PUBLIC_IP:-127.0.0.1}"
+    DASHBOARD_PORT="${SOLACE_DASHBOARD_PORT:-8888}"
+    INSTALL_BRANCH="${SOLACE_BRANCH:-$GITHUB_BRANCH}"
+    ADMIN_URL="http://$PUBLIC_IP:5000"
+    if [ -f "$SETTINGS_FILE" ]; then
+        local branch
+        branch="$(grep -o '"branch": *"[^"]*"' "$SETTINGS_FILE" | cut -d'"' -f4)"
+        [ -n "$branch" ] && INSTALL_BRANCH="$branch"
+    fi
 }
 
-load_settings
+set_env_value() {
+    local key="$1"
+    local value="$2"
+    local quoted tmp found=0 line
+    quoted="$(printf '%q' "$value")"
+    tmp="$CONFIG_DIR/termux.env.tmp"
+    : > "$tmp"
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            "$key="*)
+                printf '%s=%s\n' "$key" "$quoted" >> "$tmp"
+                found=1
+                ;;
+            *)
+                printf '%s\n' "$line" >> "$tmp"
+                ;;
+        esac
+    done < "$ENV_FILE"
+    if [ "$found" -eq 0 ]; then
+        printf '%s=%s\n' "$key" "$quoted" >> "$tmp"
+    fi
+    cat "$tmp" > "$ENV_FILE"
+    rm -f "$tmp"
+}
 
-check_update() {
-    [ "$INSTALL_BRANCH" = "dev" ] && return
-    local json=$(curl -s "https://api.github.com/repos/$GITHUB_REPO/releases?per_page=100")
-    local latest=$(echo "$json" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"//;s/"//' | grep -v "^dev-build$" | grep -E '^v?0\.' | head -n1)
-    [ -z "$latest" ] && return
-    local dismissed=$(grep -o '"dismissedUpdate": *"[^"]*"' "$SETTINGS_FILE" 2>/dev/null | cut -d'"' -f4)
-    [ "$dismissed" = "$latest" ] && return
-    [ "$latest" = "$CURRENT_VERSION" ] && return
-    local choice
-    choice=$(printf "Yes, update\nNo, don't show again" | fzf --height=20% --reverse --border --prompt="New version $latest available. Update now? > ")
-    if [ "$choice" = "Yes, update" ]; then
-        update_solace
-    else
-        if grep -q '"dismissedUpdate"' "$SETTINGS_FILE" 2>/dev/null; then
-            sed -i 's/"dismissedUpdate": *"[^"]*"/"dismissedUpdate": "'"$latest"'"/' "$SETTINGS_FILE"
-        else
-            sed -i '/"updatedAt"/i\  "dismissedUpdate": "'"$latest"'",' "$SETTINGS_FILE"
+save_settings_value() {
+    local key="$1"
+    local value="$2"
+    [ -f "$SETTINGS_FILE" ] || return
+    sed -i "s|\"$key\": *\"[^\"]*\"|\"$key\": \"$value\"|" "$SETTINGS_FILE"
+}
+
+open_url() {
+    local url="$1"
+    if command -v termux-open-url >/dev/null 2>&1; then
+        termux-open-url "$url" >/dev/null 2>&1 && return 0
+    fi
+    if [ -x "$TERMUX_PREFIX/bin/termux-open-url" ]; then
+        "$TERMUX_PREFIX/bin/termux-open-url" "$url" >/dev/null 2>&1 && return 0
+    fi
+    echo "Open in your browser: $url"
+    sleep 3
+}
+
+launch_web_portal() {
+    if ! is_running; then
+        echo "[Solace] The web portal is not running. Start the server first."
+        return 1
+    fi
+    open_url "$ADMIN_URL"
+}
+
+launch_aspire_panel() {
+    local url
+    if ! is_process_alive; then
+        echo "[Solace] The server is not running. Start the server first."
+        return 1
+    fi
+    start_dashboard_forwarder
+    url="$(get_public_dashboard_url)"
+    [ -n "$url" ] || url="$(get_dashboard_url)"
+    if [ -z "$url" ]; then
+        echo "[Solace] The Aspire panel is not available yet. Start the server first."
+        return 1
+    fi
+    open_url "$url"
+}
+
+menu_item() {
+    local key="$1" label="$2"
+    printf '  │ %s[%s]%s %-40s│\n' "$CYN" "$key" "$RST" "$label"
+}
+
+get_version() {
+    local version
+    version="$(grep -o '"version": *"[^"]*"' "$SETTINGS_FILE" 2>/dev/null | cut -d'"' -f4)"
+    if [ -n "$version" ]; then
+        printf '%s\n' "$version"
+        return 0
+    fi
+    ubuntu_run git -C /root/Solace rev-parse --short HEAD 2>/dev/null
+}
+
+require_rootfs() {
+    if [ ! -x "$TERMUX_PREFIX/bin/proot-distro" ] || [ ! -d "$UBUNTU_HOME" ]; then
+        echo "Solace is not installed yet. Run install.sh first."
+        return 1
+    fi
+    if [ ! -f "$ENV_FILE" ]; then
+        echo "Solace is not configured. Run install.sh again."
+        return 1
+    fi
+    return 0
+}
+
+ubuntu_run() {
+    proot-distro login ubuntu -- "$@"
+}
+
+ubuntu_dotnet() {
+    proot-distro login ubuntu -- bash -c "$UBUNTU_DOTNET_PRELUDE"'
+exec "$@"' _ "$@"
+}
+
+check_deps() {
+    local missing="" cmd ubuntu_missing
+    for cmd in fzf pgrep pkill curl pg_ctl pg_isready psql; do
+        command -v "$cmd" >/dev/null 2>&1 || missing="$missing $cmd"
+    done
+    [ -f "$TERMUX_PGDATA/PG_VERSION" ] || missing="$missing postgres"
+    ubuntu_missing="$(ubuntu_run bash -c "$UBUNTU_DOTNET_PRELUDE"'
+for c in dotnet aspire java git; do
+    command -v "$c" >/dev/null 2>&1 || echo "$c"
+done' 2>/dev/null)"
+    if [ -n "$missing$ubuntu_missing" ]; then
+        echo "Missing dependencies:$missing $ubuntu_missing"
+        return 1
+    fi
+    return 0
+}
+
+pg_ready() {
+    pg_isready -q -h 127.0.0.1 -p 5432 2>/dev/null
+}
+
+start_postgres() {
+    pg_ready && return 0
+    if [ ! -f "$TERMUX_PGDATA/PG_VERSION" ]; then
+        echo "PostgreSQL is not configured. Run install.sh again."
+        return 1
+    fi
+    pg_ctl -D "$TERMUX_PGDATA" -l "$TERMUX_PGDATA/server.log" -w -t 120 start >/dev/null 2>&1 || true
+    local waited=0
+    while [ "$waited" -lt 120 ]; do
+        pg_ready && return 0
+        sleep 1
+        waited=$((waited + 1))
+    done
+    echo "PostgreSQL failed to start. See $TERMUX_PGDATA/server.log"
+    return 1
+}
+
+stop_postgres() {
+    pg_ready || return 0
+    pg_ctl -D "$TERMUX_PGDATA" -w -t 60 stop -m fast >/dev/null 2>&1 || true
+}
+
+with_postgres() {
+    local payload="$1" started=0 rc
+    if ! pg_ready; then
+        start_postgres || return 1
+        started=1
+    fi
+    bash -c "$payload"
+    rc=$?
+    [ "$started" -eq 1 ] && stop_postgres
+    return "$rc"
+}
+
+start_server() {
+    if is_process_alive; then
+        return 0
+    fi
+
+    if ! check_deps; then
+        echo "Run the installer again or use Settings > Repair."
+        return 1
+    fi
+
+    start_postgres || return 1
+
+    mkdir -p "$LOG_DIR"
+    rm -f "$STARTUP_JSON" "$PID_FILE"
+    : > "$STARTUP_LOG"
+
+    nohup proot-distro login ubuntu -- env \
+        ENV_FILE="$UBUNTU_ENV_FILE" \
+        STARTUP_JSON="$UBUNTU_STARTUP_JSON" \
+        APP_HOST="$UBUNTU_APP_HOST" \
+        bash -c '
+            set -a
+            . "$ENV_FILE"
+            set +a
+            export DOTNET_ROOT="$HOME/.dotnet"
+            export PATH="$HOME/.dotnet:$HOME/.dotnet/tools:$PATH"
+            export DOTNET_CLI_TELEMETRY_OPTOUT=1
+            export DOTNET_NOLOGO=1
+            export DOTNET_gcServer=0
+            export ASPIRE_CLI_START_TIMEOUT=21600
+            cd /root/Solace || exit 1
+            ASPIRE_BUILD_ARGS=""
+            if [ -f /root/Solace/.termux-prebuilt ]; then
+                ASPIRE_BUILD_ARGS="--no-build"
+                echo "[Solace] Using prebuilt Aspire bundle."
+            fi
+            aspire run --detach --format json --non-interactive $ASPIRE_BUILD_ARGS --apphost "$APP_HOST" -- --environment Termux >"$STARTUP_JSON"
+            rc=$?
+            [ "$rc" -eq 0 ] || exit "$rc"
+            pid="$(sed -n "s/.*\"appHostPid\": *\([0-9][0-9]*\).*/\1/p" "$STARTUP_JSON" | tail -n1)"
+            [ -n "$pid" ] || exit 1
+            while kill -0 "$pid" 2>/dev/null; do
+                sleep 5
+            done
+            exit 0
+        ' >>"$STARTUP_LOG" 2>&1 </dev/null &
+
+    echo "$!" > "$PID_FILE"
+    disown 2>/dev/null || true
+
+    local waited=0
+    while [ "$waited" -lt 10 ]; do
+        [ -s "$STARTUP_JSON" ] && break
+        if ! kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null && ! is_process_alive; then
+            echo ""
+            echo -e "${RED}Solace failed to start.${RST}"
+            echo ""
+            tail -n 40 "$STARTUP_LOG" 2>/dev/null || true
+            return 1
         fi
-    fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    echo "Solace is starting. The first start can take several minutes."
+    start_dashboard_forwarder
+    return 0
 }
 
-update_menu() {
+stop_server() {
+    stop_dashboard_forwarder
+
+    if [ -f "$SOLACE_DIR/src/Solace.AppHost/Solace.AppHost.csproj" ]; then
+        ubuntu_dotnet aspire stop --non-interactive --apphost "$UBUNTU_APP_HOST" >/dev/null 2>&1 &
+        local stopper=$!
+        local waited=0
+        while kill -0 "$stopper" 2>/dev/null && [ "$waited" -lt 60 ]; do
+            sleep 1
+            waited=$((waited + 1))
+        done
+        kill "$stopper" 2>/dev/null || true
+    fi
+
+    local pid
+    pid="$(get_apphost_pid)"
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+    pid="$(get_cli_pid)"
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+    if [ -f "$PID_FILE" ]; then
+        pid="$(cat "$PID_FILE" 2>/dev/null)"
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+    fi
+
+    sleep 2
+    pkill -f "Solace\.AppHost|Solace\.WebPortal|Solace\.ApiServer|Solace\.AuthServer|Solace\.Cdn|Solace\.Locator" 2>/dev/null || true
+    pkill -f "aspire run .*Solace" 2>/dev/null || true
+    pkill -f "proot.*aspire stop" 2>/dev/null || true
+
+    local waited=0
+    while is_process_alive && [ "$waited" -lt 30 ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    stop_postgres
+    rm -f "$PID_FILE" "$STARTUP_JSON"
+}
+
+eula_confirmation_loop() {
+    load_env
+    [ "${Shared__AcceptMinecraftEula:-false}" = "true" ] && return 0
+
     while true; do
-        load_settings
-        printf '\033[H\033[J'; show_banner
-        section_title "UPDATE SOLACE"
+        clear; show_banner
+        section_title "EULA CONFIRMATION"
+        echo "  Before starting the server, you must accept the"
+        echo "  Minecraft End User License Agreement."
         echo ""
-        echo -e "  ${CYN}Mode:${RST}    $INSTALL_MODE"
-        echo -e "  ${CYN}Branch:${RST}  $INSTALL_BRANCH"
-        echo -e "  ${CYN}Version:${RST} $CURRENT_VERSION"
+        echo "  Read it here:"
+        echo "  https://aka.ms/MinecraftEULA"
         echo ""
-        if [ "$INSTALL_BRANCH" = "main" ]; then
-            echo -e "  ${CYN}[1]${RST} Download Release"
-        else
-            echo -e "  ${CYN}[1]${RST} Download Dev Build"
+        CHOICE=$(printf "Yes, I agree\nNo, I deny" | fzf \
+            --height=20% --reverse --border --prompt="Accept EULA? > ")
+
+        if [ "$CHOICE" = "Yes, I agree" ]; then
+            set_env_value "Shared__AcceptMinecraftEula" "true"
+            echo ""
+            echo "[Solace] EULA accepted."
+            sleep 1
+            return 0
         fi
-        echo -e "  ${CYN}[2]${RST} Switch Branch"
-        echo -e "  ${CYN}[0]${RST} Back"
+
+        clear; show_banner
+        section_title "ARE YOU SURE?"
+        echo "  The server cannot run buildplate services without"
+        echo "  accepting the EULA."
         echo ""
-        printf "Choice > "
-        read -r CHOICE < /dev/tty
-        CHOICE="$(echo "$CHOICE" | tr -d '\r\n')"
-        case "$CHOICE" in
-            1)
-                if [ "$INSTALL_BRANCH" = "main" ]; then
-                    echo "[Solace] Fetching releases..."
-                    local json=$(curl -s "https://api.github.com/repos/$GITHUB_REPO/releases?per_page=100")
-                    local tags=$(echo "$json" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"//;s/"//' | grep -v "^dev-build$" | grep -E '^v?0\.')
-                    [ -z "$tags" ] && echo -e "${RED}[ERROR] No releases found${RST}" && sleep 2 && continue
-                    local sel=$(echo "$tags" | fzf --height=40% --reverse --border --prompt="Version > " --no-multi)
-                    [ -z "$sel" ] && continue
-                    local zip_name="Solace-${RELEASE_ARCH}.zip"
-                    local tmp=$(mktemp -d ~/Solace_update_XXXXXX) || { echo "Failed"; sleep 2; continue; }
-                    cd "$tmp" || continue
-                    force_stop_server
-                    echo -e "  ${BLU}>${RST} Downloading $sel ($zip_name)"
-                    curl -L --progress-bar -o server.zip "https://github.com/$GITHUB_REPO/releases/download/${sel}/${zip_name}"
-                    echo -e "  ${GRN}✔${RST} Download complete"
-                    echo -ne "  ${BLU}>${RST} Extracting... " && unzip -o server.zip >/dev/null 2>&1 && echo -e "${GRN}done${RST}" || { echo -e "${RED}failed${RST}"; sleep 2; continue; }
-                    local dir="Solace-${RELEASE_ARCH}"
-                    if [ -d "$dir" ]; then
-                        mv "$dir/"* "$SOLACE_DIR/" 2>/dev/null || true
-                    else
-                        find . -maxdepth 1 -not -name 'server.zip' -not -name '.' -exec mv {} "$SOLACE_DIR/" \; 2>/dev/null || true
-                    fi
-                    chmod -R +x "$SOLACE_DIR/components/" 2>/dev/null || true
-                    echo "$sel" > "$VERSION_FILE"
-                    cat > "$SETTINGS_FILE" << JSONEOF
-{
-  "installMode": "prebuilt",
-  "branch": "main",
-  "version": "$sel",
-  "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        CHOICE2=$(printf "Go back\nYes, I deny" | fzf \
+            --height=20% --reverse --border --prompt="Confirm? > ")
+        [ "$CHOICE2" = "Yes, I deny" ] && return 1
+    done
 }
-JSONEOF
-                    cd /; rm -rf "$tmp"
-                    echo "[Solace] Update complete ($sel)"
-                    sleep 3
+
+first_start_checks() {
+    load_env
+
+    if [ ! -d "$SOLACE_DIR/.git" ]; then
+        clear; show_banner
+        section_title "INSTALLATION NOT FOUND"
+        echo "  $UBUNTU_SOLACE_DIR is missing inside Ubuntu."
+        echo "  Run the installer again."
+        printf "Press ENTER..."
+        pause
+        return 1
+    fi
+
+    if [ ! -f "$SOLACE_DIR/staticdata/resourcepacks/vanilla.zip" ]; then
+        clear; show_banner
+        section_title "RESOURCE PACK REQUIRED"
+        echo "  The vanilla resource pack is missing:"
+        echo "  $UBUNTU_SOLACE_DIR/staticdata/resourcepacks/vanilla.zip"
+        echo ""
+        echo "  Without it, textures, the store and buildplate"
+        echo "  previews will not work correctly."
+        echo ""
+        CHOICE=$(printf "Continue anyway\nCancel" | fzf \
+            --height=20% --reverse --border --prompt="Resource pack > ")
+        [ "$CHOICE" = "Continue anyway" ] || return 1
+    fi
+
+    eula_confirmation_loop || return 1
+    return 0
+}
+
+read_password_from_log() {
+    local log="$1"
+    [ -n "$log" ] && [ -f "$log" ] || return 1
+    grep -a -A6 "SETUP: Initial owner account created" "$log" 2>/dev/null \
+        | sed 's/\x1b\[[0-9;]*m//g' \
+        | tr -d '\r' \
+        | sed -n 's/.*Password: *//p' \
+        | tail -n1
+}
+
+get_admin_password() {
+    local log password f
+    local paths=""
+
+    log="$(get_cli_log)"
+    [ -n "$log" ] && paths="$(host_path "$log")"
+    for log in $paths "$STARTUP_LOG"; do
+        password="$(read_password_from_log "$log")"
+        if [ -n "$password" ]; then
+            printf '%s\n' "$password"
+            return 0
+        fi
+    done
+
+    for f in $(ls -t "$PROOT_ROOTFS"/tmp/aspire-dcp*/*_out 2>/dev/null); do
+        password="$(read_password_from_log "$f")"
+        if [ -n "$password" ]; then
+            printf '%s\n' "$password"
+            return 0
+        fi
+    done
+
+    if is_process_alive; then
+        password="$(ubuntu_dotnet timeout 60 aspire logs web-portal --apphost "$UBUNTU_APP_HOST" --tail 5000 2>/dev/null \
+            | sed -n 's/.*Password: *//p' \
+            | tail -n1)"
+        if [ -n "$password" ]; then
+            printf '%s\n' "$password"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+show_resource_logs() {
+    local resource="$1"
+    clear; show_banner; section_title "LOGS - $resource"
+    ubuntu_dotnet timeout 60 aspire logs "$resource" --apphost "$UBUNTU_APP_HOST" --tail 200 2>/dev/null || echo "  No logs available."
+    echo ""
+    printf "Press ENTER..."
+    pause
+}
+
+logs_menu() {
+    while true; do
+        clear; show_banner
+        section_title "LOGS"
+
+        local log_file="$STARTUP_LOG"
+        local cli_log
+        cli_log="$(get_cli_log)"
+        if [ -n "$cli_log" ] && [ -f "$(host_path "$cli_log")" ]; then
+            log_file="$(host_path "$cli_log")"
+        fi
+
+        if [ -f "$log_file" ]; then
+            echo -e "  ${CYN}$log_file${RST}"
+            echo ""
+            tail -n 100 "$log_file"
+        else
+            echo "  No log file yet."
+        fi
+        echo ""
+
+        local choice
+        choice=$(printf "Refresh\nService logs\nStartup output\nBack" | fzf \
+            --height=15% --reverse --border --prompt="Logs > ")
+        case "$choice" in
+            "Service logs")
+                local service
+                service=$(printf "web-portal\napi-server\nauth-server\nlocator\ncdn\nevent-bus\nobject-store" | fzf \
+                    --height=30% --reverse --border --prompt="Service > ")
+                [ -n "$service" ] && show_resource_logs "$service"
+                ;;
+            "Startup output")
+                clear; show_banner; section_title "STARTUP OUTPUT"
+                if [ -f "$STARTUP_LOG" ]; then
+                    tail -n 150 "$STARTUP_LOG"
                 else
-                    local confirm=$(printf "Yes, continue\nNo, cancel" | fzf --height=20% --reverse --border --prompt="Dev builds are unstable. Continue? > ")
-                    [ "$confirm" != "Yes, continue" ] && continue
-                    local zip_name="Solace-Dev-${RELEASE_ARCH}.zip"
-                    local tmp=$(mktemp -d ~/Solace_update_XXXXXX) || { echo "Failed"; sleep 2; continue; }
-                    cd "$tmp" || continue
-                    force_stop_server
-                    echo -e "  ${BLU}>${RST} Downloading dev-build ($zip_name)"
-                    curl -L --progress-bar -o server.zip "https://github.com/$GITHUB_REPO/releases/download/dev-build/${zip_name}"
-                    echo -e "  ${GRN}✔${RST} Download complete"
-                    echo -ne "  ${BLU}>${RST} Extracting... " && unzip -o server.zip >/dev/null 2>&1 && echo -e "${GRN}done${RST}" || { echo -e "${RED}failed${RST}"; sleep 2; continue; }
-                    local dir="Solace-Dev-${RELEASE_ARCH}"
-                    if [ -d "$dir" ]; then
-                        mv "$dir/"* "$SOLACE_DIR/" 2>/dev/null || true
-                    else
-                        find . -maxdepth 1 -not -name 'server.zip' -not -name '.' -exec mv {} "$SOLACE_DIR/" \; 2>/dev/null || true
-                    fi
-                    chmod -R +x "$SOLACE_DIR/components/" 2>/dev/null || true
-                    echo "dev-build" > "$VERSION_FILE"
-                    cat > "$SETTINGS_FILE" << JSONEOF
-{
-  "installMode": "prebuilt",
-  "branch": "dev",
-  "version": "dev-build",
-  "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-JSONEOF
-                    cd /; rm -rf "$tmp"
-                    echo "[Solace] Update complete (dev-build)"
-                    sleep 3
-                fi ;;
-            2)
-                local sel
-                sel=$(pick_branch "Switch Branch") || continue
-                if [ "$sel" = "dev" ]; then
-                    local zip_name="Solace-Dev-${RELEASE_ARCH}.zip"
-                    local tmp=$(mktemp -d ~/Solace_update_XXXXXX) || continue
-                    cd "$tmp" || continue
-                    force_stop_server
-                    echo -e "  ${BLU}>${RST} Downloading dev-build ($zip_name)"
-                    curl -L --progress-bar -o server.zip "https://github.com/$GITHUB_REPO/releases/download/dev-build/${zip_name}"
-                    echo -e "  ${GRN}✔${RST} Download complete"
-                    echo -ne "  ${BLU}>${RST} Extracting... " && unzip -o server.zip >/dev/null 2>&1 && echo -e "${GRN}done${RST}" || { echo -e "${RED}failed${RST}"; continue; }
-                    local dir="Solace-Dev-${RELEASE_ARCH}"
-                    [ -d "$dir" ] && mv "$dir/"* "$SOLACE_DIR/" 2>/dev/null || true
-                    chmod -R +x "$SOLACE_DIR/components/" 2>/dev/null || true
-                    echo "dev-build" > "$VERSION_FILE"
-                    cat > "$SETTINGS_FILE" << JSONEOF
-{
-  "installMode": "prebuilt",
-  "branch": "dev",
-  "version": "dev-build",
-  "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-JSONEOF
-                    cd /; rm -rf "$tmp"
-                    echo "[Solace] Switched to dev (dev-build)"
-                else
-                    local json=$(curl -s "https://api.github.com/repos/$GITHUB_REPO/releases?per_page=100")
-                    local tag=$(echo "$json" | grep -o '"tag_name": *"[^"]*"' | sed 's/"tag_name": *"//;s/"//' | grep -v "^dev-build$" | grep -E '^v?0\.' | head -n1)
-                    [ -z "$tag" ] && echo -e "${RED}[ERROR] No release found${RST}" && sleep 2 && continue
-                    local zip_name="Solace-${RELEASE_ARCH}.zip"
-                    local tmp=$(mktemp -d ~/Solace_update_XXXXXX) || continue
-                    cd "$tmp" || continue
-                    force_stop_server
-                    echo -e "  ${BLU}>${RST} Downloading $tag ($zip_name)"
-                    curl -L --progress-bar -o server.zip "https://github.com/$GITHUB_REPO/releases/download/${tag}/${zip_name}"
-                    echo -e "  ${GRN}✔${RST} Download complete"
-                    echo -ne "  ${BLU}>${RST} Extracting... " && unzip -o server.zip >/dev/null 2>&1 && echo -e "${GRN}done${RST}" || { echo -e "${RED}failed${RST}"; continue; }
-                    local dir="Solace-${RELEASE_ARCH}"
-                    [ -d "$dir" ] && mv "$dir/"* "$SOLACE_DIR/" 2>/dev/null || true
-                    chmod -R +x "$SOLACE_DIR/components/" 2>/dev/null || true
-                    echo "$tag" > "$VERSION_FILE"
-                    cat > "$SETTINGS_FILE" << JSONEOF
-{
-  "installMode": "prebuilt",
-  "branch": "main",
-  "version": "$tag",
-  "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-JSONEOF
-                    cd /; rm -rf "$tmp"
-                    echo "[Solace] Switched to main ($tag)"
+                    echo "  No startup output yet."
                 fi
-                sleep 3 ;;
-            0|q) break ;;
+                printf "Press ENTER..."
+                pause
+                ;;
+            "Back"|"") return ;;
         esac
     done
 }
 
-check_update
+process_viewer() {
+    while true; do
+        clear; show_banner
+        section_title "PROCESS EXPLORER"
+        if is_running; then
+            echo -e "  ${GRN}[RUNNING]${RST}  $ADMIN_URL"
+        elif is_process_alive; then
+            echo -e "  ${YLW}[STARTING]${RST} $ADMIN_URL"
+        else
+            echo -e "  ${RED}[STOPPED]${RST}"
+        fi
+        echo ""
+
+        local selected
+        selected=$({
+            echo "Back to Main Menu"
+            ps -eo pid,ppid,cmd --no-headers 2>/dev/null | \
+                grep -E "aspire|Solace|dotnet|java" | \
+                grep -v "grep -E"
+        } | fzf --height=50% --reverse --border --prompt="Process > ")
+
+        [ -z "$selected" ] && continue
+        [ "$selected" = "Back to Main Menu" ] && return
+
+        local selpid
+        selpid=$(echo "$selected" | awk '{print $1}')
+        [[ "$selpid" =~ ^[0-9]+$ ]] || continue
+
+        while true; do
+            clear
+            echo "==== PROCESS ===="
+            echo "PID: $selpid"
+            echo ""
+            ps -p "$selpid" -o pid,ppid,etime,cmd 2>/dev/null || echo "Process exited."
+            echo ""
+            local log_file="$STARTUP_LOG"
+            local cli_log
+            cli_log="$(get_cli_log)"
+            if [ -n "$cli_log" ] && [ -f "$(host_path "$cli_log")" ]; then
+                log_file="$(host_path "$cli_log")"
+            fi
+            [ -f "$log_file" ] && tail -n 80 "$log_file"
+            local ch
+            ch=$(printf "Refresh\nBack" | fzf --height=10% --reverse --border --prompt="Process > ")
+            [ "$ch" = "Back" ] && break
+        done
+    done
+}
+
+update_solace() {
+    load_env
+    stop_server
+
+    clear; show_banner
+    section_title "UPDATE SOLACE"
+    echo "  Branch: $INSTALL_BRANCH"
+    echo ""
+
+    if ! proot-distro login ubuntu -- env BRANCH="$INSTALL_BRANCH" bash -s <<'INNER'
+set -e
+cd /root/Solace
+git fetch --prune origin "$BRANCH"
+git checkout "$BRANCH"
+git pull --ff-only origin "$BRANCH"
+git submodule update --init --recursive
+rm -f /root/Solace/.termux-prebuilt
+INNER
+    then
+        echo -e "${RED}Update failed. You may have local changes in $UBUNTU_SOLACE_DIR.${RST}"
+        printf "Press ENTER..."
+        pause
+        return 1
+    fi
+
+    local version
+    version="$(ubuntu_run git -C "$UBUNTU_SOLACE_DIR" rev-parse --short HEAD 2>/dev/null)"
+    save_settings_value "version" "$version"
+    save_settings_value "updatedAt" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+    echo ""
+    echo -e "${GRN}[Solace] Updated to $version.${RST}"
+    echo "The next start will rebuild the projects."
+    printf "Press ENTER..."
+    pause
+}
+
+change_public_ip() {
+    load_env
+    clear; show_banner
+    section_title "PUBLIC ENDPOINT"
+    echo "  Use 127.0.0.1 for playing on this device."
+    echo "  Use your phone's LAN IP for other devices."
+    echo ""
+    printf "IP or hostname [%s] > " "$PUBLIC_IP"
+    read -r NEW_IP < /dev/tty
+    NEW_IP="$(echo "$NEW_IP" | tr -d '\r\n')"
+    [ -z "$NEW_IP" ] && return
+
+    set_env_value "SOLACE_PUBLIC_IP" "$NEW_IP"
+    for name in WebPortal Locator AuthServer ApiServer Cdn; do
+        case "$name" in
+            WebPortal) port=5000 ;;
+            Locator) port=8080 ;;
+            AuthServer) port=8088 ;;
+            ApiServer) port=8089 ;;
+            Cdn) port=8090 ;;
+        esac
+        set_env_value "Shared__PublicEndpoints__$name" "http://$NEW_IP:$port"
+    done
+    set_env_value "BuildplateLauncher__PublicEndpoint" "$NEW_IP"
+    echo ""
+    echo "[Solace] Endpoint updated. Restart the server."
+    sleep 2
+}
+
+show_admin_credentials() {
+    load_env
+    clear; show_banner
+    section_title "ADMIN ACCOUNT"
+    echo "  Email:    admin@solace.com"
+    local password
+    password="$(get_admin_password)"
+    if [ -n "$password" ]; then
+        echo "  Password: $password"
+    else
+        echo "  Password: not found yet"
+        echo ""
+        echo "  Start the server once, then check this screen again."
+        echo "  If the server has already started, open Logs to read"
+        echo "  the Web Portal output."
+    fi
+    echo ""
+    echo "  Change it after your first login."
+    printf "Press ENTER..."
+    pause
+}
+
+switch_branch() {
+    load_env
+    clear; show_banner
+    section_title "SWITCH BRANCH"
+    echo "  Current: $INSTALL_BRANCH"
+    echo ""
+    echo -e "  ${YLW}Only the aspire branch currently has Termux support.${RST}"
+    echo ""
+    printf "Branch [%s] > " "$INSTALL_BRANCH"
+    read -r NEW_BRANCH < /dev/tty
+    NEW_BRANCH="$(echo "$NEW_BRANCH" | tr -d '\r\n')"
+    [ -z "$NEW_BRANCH" ] && return
+    [ "$NEW_BRANCH" = "$INSTALL_BRANCH" ] && return
+
+    if [ "$NEW_BRANCH" != "aspire" ]; then
+        printf "This branch may not support Termux. Continue? [y/N] > "
+        read -r CONFIRM < /dev/tty
+        case "$CONFIRM" in
+            y|Y|yes|YES) ;;
+            *) return ;;
+        esac
+    fi
+
+    set_env_value "SOLACE_BRANCH" "$NEW_BRANCH"
+    INSTALL_BRANCH="$NEW_BRANCH"
+    save_settings_value "branch" "$NEW_BRANCH"
+    update_solace
+}
+
+reset_databases() {
+    load_env
+    clear; show_banner
+    section_title "RESET DATABASES"
+    echo "  This deletes all Solace data: profiles, buildplates,"
+    echo "  accounts and the web portal database."
+    echo ""
+    printf "Type RESET to continue > "
+    read -r CONFIRM < /dev/tty
+    [ "$CONFIRM" = "RESET" ] || return
+    stop_server
+
+    with_postgres 'for db in EarthDb PlayfabDb WebPortalDb; do
+        PGPASSWORD="$SOLACE_DB_PASSWORD" dropdb -h 127.0.0.1 -U solace --force --if-exists "$db" 2>/dev/null || true
+        PGPASSWORD="$SOLACE_DB_PASSWORD" createdb -h 127.0.0.1 -U solace -O solace "$db" 2>/dev/null || true
+    done'
+    rm -rf "$UBUNTU_HOME/.aspnet/DataProtection-Keys"
+
+    echo "[Solace] Databases reset."
+    sleep 2
+}
+
+uninstall_solace() {
+    clear; show_banner
+    section_title "UNINSTALL"
+    echo "  This permanently removes Solace files, configuration"
+    echo "  and databases."
+    echo ""
+    printf "Type YES to continue > "
+    read -r CONFIRM < /dev/tty
+    [ "$CONFIRM" = "YES" ] || return
+
+    stop_server
+
+    if [ -f "$TERMUX_PGDATA/.solace-managed" ]; then
+        stop_postgres
+        rm -rf "$TERMUX_PGDATA"
+    else
+        if [ -f "$ENV_FILE" ]; then
+            set -a
+            . "$ENV_FILE"
+            set +a
+        fi
+        with_postgres 'for db in EarthDb PlayfabDb WebPortalDb; do
+            PGPASSWORD="$SOLACE_DB_PASSWORD" dropdb -h 127.0.0.1 -U solace --force --if-exists "$db" 2>/dev/null || true
+        done
+        PGPASSWORD="$SOLACE_DB_PASSWORD" psql -h 127.0.0.1 -U solace -d postgres -c "DROP ROLE IF EXISTS solace" 2>/dev/null || true'
+    fi
+
+    rm -rf "$SOLACE_DIR" "$CONFIG_DIR" "$UBUNTU_HOME/.aspnet/DataProtection-Keys"
+    if [ -n "${SOLACE_LAUNCHER:-}" ]; then
+        rm -f "$SOLACE_LAUNCHER" 2>/dev/null || true
+        echo "[Solace] Uninstalled, including the earth command."
+    else
+        echo "[Solace] Uninstalled."
+        echo "The launcher was not installed through the Termux installer."
+    fi
+    echo "[Solace] The Termux postgresql package was left installed."
+    sleep 3
+    exit 0
+}
+
+settings_menu() {
+    while true; do
+        load_env
+        clear; show_banner
+        section_title "SETTINGS"
+        echo -e "  ${CYN}Endpoint:${RST} $PUBLIC_IP"
+        echo -e "  ${CYN}Branch:${RST}   $INSTALL_BRANCH"
+        echo -e "  ${CYN}Server:${RST}   $UBUNTU_SOLACE_DIR"
+        echo ""
+
+        local choice
+        choice=$(printf "Change Public IP\nShow Admin Account\nSwitch Branch\nReset Databases\nUninstall\nBack" | fzf \
+            --height=30% --reverse --border --prompt="Settings > " --no-multi)
+        case "$choice" in
+            "Change Public IP") change_public_ip ;;
+            "Show Admin Account") show_admin_credentials ;;
+            "Switch Branch") switch_branch ;;
+            "Reset Databases") reset_databases ;;
+            "Uninstall") uninstall_solace ;;
+            "Back"|"") return ;;
+        esac
+    done
+}
+
+info_panel() {
+    load_env
+    clear; show_banner
+    section_title "INFORMATION"
+    echo "  ── Endpoints ──"
+    echo "  Admin Panel:      http://$PUBLIC_IP:5000"
+    echo "  Locator:          http://$PUBLIC_IP:8080"
+    echo "  Auth Server:      http://$PUBLIC_IP:8088"
+    echo "  API Server:       http://$PUBLIC_IP:8089"
+    echo "  CDN:              http://$PUBLIC_IP:8090"
+    echo "  Buildplate:       $PUBLIC_IP:19132+"
+    echo ""
+    local dashboard
+    dashboard="$(get_public_dashboard_url)"
+    [ -z "$dashboard" ] && dashboard="$(get_dashboard_url)"
+    if [ -n "$dashboard" ]; then
+        echo "  Aspire Dashboard: $dashboard"
+    else
+        echo "  Aspire Dashboard: available after the server starts"
+    fi
+    echo ""
+    echo "  ── Setup Steps ──"
+    echo "  1. Start the server from the main menu"
+    echo "  2. Open the Admin Panel: http://$PUBLIC_IP:5000"
+    echo "  3. Log in as admin@solace.com (password: Settings > Show Admin Account)"
+    echo "  4. Create a separate account for in-game sign-in"
+    echo "  5. Patch Minecraft Earth and use the endpoints above"
+    echo ""
+    echo "  Resource pack:"
+    echo "    $UBUNTU_SOLACE_DIR/staticdata/resourcepacks/vanilla.zip"
+    echo ""
+    echo "  Object store:"
+    echo "    $UBUNTU_SOLACE_DIR/data/object_store"
+    echo ""
+    echo "  Version:"
+    echo "    $(get_version) ($INSTALL_BRANCH)"
+    echo ""
+    printf "Back\n" | fzf --height=12% --reverse --border --prompt="Info > " >/dev/null
+}
+
+case "${1:-}" in
+    help|--help|-h) update_self "$@"; show_help ;;
+esac
+
+if [ "${1:-}" = "eula" ]; then
+    EULA_ACTION="${2:-}"
+    if [ ! -f "$ENV_FILE" ]; then
+        echo "[Solace] Not installed. Run the installer first."
+        exit 1
+    fi
+    if [ "$EULA_ACTION" = "--delete" ]; then
+        set_env_value "Shared__AcceptMinecraftEula" "false"
+        echo "[Solace] Minecraft EULA acceptance removed."
+        exit 0
+    fi
+    set_env_value "Shared__AcceptMinecraftEula" "true"
+    echo "[Solace] Minecraft EULA accepted."
+    echo "[Solace] Restart the server for this to take effect."
+    exit 0
+fi
+
+if [ "${1:-}" = "portal" ] || [ "${1:-}" = "web" ]; then
+    load_env
+    launch_web_portal || exit 1
+    exit 0
+fi
+
+if [ "${1:-}" = "aspire" ] || [ "${1:-}" = "dashboard" ]; then
+    load_env
+    launch_aspire_panel || exit 1
+    exit 0
+fi
+
+if [ "${1:-}" = "start" ]; then
+    load_env
+    if [ "${Shared__AcceptMinecraftEula:-false}" != "true" ]; then
+        echo "[Solace] Accept the Minecraft EULA first: earth eula"
+        exit 1
+    fi
+    if is_process_alive; then
+        start_dashboard_forwarder
+        echo "[Solace] Already running."
+        exit 0
+    fi
+    start_server || exit 1
+    echo "[Solace] The server is starting. Check it with: earth status"
+    exit 0
+fi
+
+if [ "${1:-}" = "stop" ]; then
+    load_env
+    stop_server
+    echo "[Solace] Stopped."
+    exit 0
+fi
+
+if [ "${1:-}" = "status" ]; then
+    load_env
+    if is_running; then
+        echo "[Solace] RUNNING  $ADMIN_URL"
+        dashboard="$(get_public_dashboard_url)"
+        [ -n "$dashboard" ] || dashboard="$(get_dashboard_url)"
+        [ -n "$dashboard" ] && echo "[Solace] Dashboard: $dashboard"
+        exit 0
+    fi
+    if is_process_alive; then
+        echo "[Solace] STARTING $ADMIN_URL"
+        dashboard="$(get_public_dashboard_url)"
+        [ -n "$dashboard" ] || dashboard="$(get_dashboard_url)"
+        [ -n "$dashboard" ] && echo "[Solace] Dashboard: $dashboard"
+        exit 0
+    fi
+    echo "[Solace] STOPPED"
+    exit 1
+fi
+
+if [ "${1:-}" = "logs" ]; then
+    load_env
+    if [ -n "${2:-}" ]; then
+        ubuntu_dotnet timeout 60 aspire logs "$2" --apphost "$UBUNTU_APP_HOST" --tail 200
+        exit 0
+    fi
+    log_file="$STARTUP_LOG"
+    cli_log="$(get_cli_log)"
+    if [ -n "$cli_log" ] && [ -f "$(host_path "$cli_log")" ]; then
+        log_file="$(host_path "$cli_log")"
+    fi
+    tail -n 200 "$log_file" 2>/dev/null || echo "[Solace] No logs yet."
+    exit 0
+fi
+
+if [ "${1:-}" = "uninstall" ]; then
+    SOLACE_LAUNCHER="$LAUNCHER_PATH"
+    uninstall_solace
+    exit 0
+fi
+
+if [ "${1:-}" = "__dashboard-forward" ]; then
+    load_env
+    dashboard_forward_loop
+    exit 0
+fi
+
+update_self "$@"
+require_rootfs || { echo "Run install.sh first."; exit 1; }
+load_env
 
 while true; do
-    printf '\033[H\033[J'; tput civis 2>/dev/null; show_banner
+    printf '\033[H\033[J'
+    tput civis 2>/dev/null || true
+    show_banner
 
-    LOCAL_IP="127.0.0.1"
     if is_running; then
-        echo -e "  ${GRN}●${RST} ${GRN}[RUNNING]${RST}  |  http://${LOCAL_IP}:5000"
+        echo -e "  ${GRN}●${RST} ${GRN}[RUNNING]${RST}  |  $ADMIN_URL"
     elif is_starting; then
-        echo -e "  ${YLW}●${RST} ${YLW}[STARTING]${RST}  |  http://${LOCAL_IP}:5000"
+        echo -e "  ${YLW}●${RST} ${YLW}[STARTING]${RST}  |  $ADMIN_URL"
     else
-        echo -e "  ${RED}●${RST} ${RED}[STOPPED]${RST}  |  http://${LOCAL_IP}:5000"
+        echo -e "  ${RED}●${RST} ${RED}[STOPPED]${RST}  |  $ADMIN_URL"
     fi
     echo -e "  ─────────────────────────────────────────────"
     echo ""
     echo -e "  ┌─────────────────────────────────────────────┐"
-    echo -e "  │ ${CYN}[1]${RST} Start/Stop Server                       │"
-    echo -e "  │ ${CYN}[2]${RST} Process Explorer                        │"
-    echo -e "  │ ${CYN}[3]${RST} Open Admin Panel                        │"
-    echo -e "  │ ${CYN}[4]${RST} Update Solace                           │"
-    echo -e "  │ ${CYN}[5]${RST} Settings                                │"
-    echo -e "  │ ${CYN}[6]${RST} Information                             │"
-    echo -e "  │ ${CYN}[0]${RST} Exit                                    │"
+    menu_item 1 "Start/Stop Server"
+    menu_item 2 "Launch Web Portal"
+    menu_item 3 "Launch Aspire Panel"
+    menu_item 4 "Logs"
+    menu_item 5 "Process Explorer"
+    menu_item 6 "Update Solace"
+    menu_item 7 "Settings"
+    menu_item 8 "Information"
+    menu_item 0 "Exit"
     echo -e "  └─────────────────────────────────────────────┘"
-    if [ "$INSTALL_MODE" = "prebuilt" ]; then
-        echo -e "  ${YLW}Solace TUI (Prebuilt - ${CURRENT_VERSION})${RST}"
-    else
-        echo -e "  ${YLW}Solace TUI (${INSTALL_MODE} - ${INSTALL_BRANCH})${RST}"
-    fi
+    echo -e "  ${YLW}Solace Aspire (Termux - $INSTALL_BRANCH)${RST}"
 
     read -t 2 -n 1 KEY < /dev/tty || true
-
-    if is_process_alive && [ -f "$EULA_FILE" ] && ! grep -q "eula=true" "$EULA_FILE" 2>/dev/null; then
-        eula_confirmation_loop
-    fi
 
     case "$KEY" in
         1)
             if is_process_alive; then
-                CH=$(printf "Yes\nNo" | fzf --height=20% --reverse --border --prompt="Stop server? > ")
-                [ "$CH" = "Yes" ] && stop_server
+                local_choice=$(printf "Yes\nNo" | fzf \
+                    --height=20% --reverse --border --prompt="Stop server? > ")
+                [ "$local_choice" = "Yes" ] && stop_server
             else
                 first_start_checks && start_server
             fi
-            if is_process_alive && [ -f "$EULA_FILE" ] && ! grep -q "eula=true" "$EULA_FILE" 2>/dev/null; then
-                eula_confirmation_loop
+            ;;
+        2)
+            if ! launch_web_portal; then
+                clear; show_banner; section_title "WEB PORTAL"
+                echo "  Start the server, then try again."
+                printf "Press ENTER..."
+                pause
             fi
             ;;
-        2) process_viewer ;;
-        3) open_admin_panel ;;
-         4) update_menu ;;
-        5) settings_menu ;;
-        6) info_panel ;;
-         0|q)
+        3)
+            if ! launch_aspire_panel; then
+                clear; show_banner; section_title "ASPIRE PANEL"
+                echo "  Start the server, then try again."
+                printf "Press ENTER..."
+                pause
+            fi
+            ;;
+        4) logs_menu ;;
+        5) process_viewer ;;
+        6) update_solace ;;
+        7) settings_menu ;;
+        8) info_panel ;;
+        0|q)
             if is_process_alive; then
                 clear; show_banner
                 section_title "SERVER IS RUNNING"
+                echo "  Exiting the TUI does not stop the server."
+                echo "  Use option 1 to stop it."
                 echo ""
-                echo "  Exiting the TUI will cause the server"
-                echo "  to stop. Please turn off the server"
-                echo "  from the Admin Panel first to avoid"
-                echo "  unexpected issues."
-                echo ""
-                CHOICE=$(printf "Cancel — Return to menu\nExit — Exit TUI (server will stop)" | fzf \
+                EXIT_CHOICE=$(printf "Cancel\nExit TUI" | fzf \
                     --height=20% --reverse --border --prompt="Exit? > ")
-                [ "$CHOICE" = "Exit — Exit TUI (server will stop)" ] || continue
+                [ "$EXIT_CHOICE" = "Exit TUI" ] || continue
             fi
-            tput cnorm 2>/dev/null; clear; break ;;
+            tput cnorm 2>/dev/null || true
+            clear
+            break
+            ;;
     esac
 done
-
-DASHBOARD

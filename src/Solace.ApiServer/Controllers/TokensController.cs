@@ -1,0 +1,113 @@
+﻿using Asp.Versioning;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.Mvc;
+using Solace.ApiServer.Types.Common;
+using Solace.ApiServer.Utils;
+using Solace.Db.Earth;
+using Solace.Db.Earth.Models.Player;
+using Rewards = Solace.ApiServer.Utils.Rewards;
+using Microsoft.EntityFrameworkCore;
+using Solace.ObjectStore.Client;
+
+namespace Solace.ApiServer.Controllers;
+
+[Authorize]
+[ApiVersion("1.1")]
+[Route("1/api/v{version:apiVersion}/player/tokens")]
+internal sealed class TokensController : SolaceControllerBase
+{
+    private readonly EarthDbContext _earthDb;
+    private readonly ObjectStoreClient _objectStore;
+    private readonly StaticData.StaticDataProvider _staticData;
+
+    public TokensController(EarthDbContext earthDb, ObjectStoreClient objectStore, StaticData.StaticDataProvider staticData)
+    {
+        _earthDb = earthDb;
+        _objectStore = objectStore;
+        _staticData = staticData;
+    }
+
+    internal sealed record TokensResponse(
+        Dictionary<Guid, Token> Tokens
+    );
+
+    [HttpGet]
+    public async Task<Results<Ok<EarthApiResponse<TokensResponse>>, BadRequest>> Get(CancellationToken cancellationToken)
+    {
+        if (!TryGetProfileId(out var accountId))
+        {
+            return TypedResults.BadRequest();
+        }
+
+        var tokens = _earthDb.Tokens
+            .AsNoTracking()
+            .Where(token => token.ProfileId == accountId)
+            .AsAsyncEnumerable();
+
+        var tokensDictionary = await tokens
+            .Where(token => token is not DailyLoginTokenEF { Claimed: true })
+            .Select(token => new KeyValuePair<Guid, Token>(token.TokenId, TokenToApiResponse(token)))
+            .ToDictionaryAsync(cancellationToken: cancellationToken);
+
+        return TypedResults.Ok(new EarthApiResponse<TokensResponse>(new(
+            tokensDictionary
+        )));
+    }
+
+    [HttpPost("{tokenId}/redeem")]
+    public async Task<Results<Ok<EarthApiResponse<Token>>, BadRequest>> Redeem(Guid tokenId, CancellationToken cancellationToken)
+    {
+        if (!TryGetProfileId(out var accountId))
+        {
+            return TypedResults.BadRequest();
+        }
+
+        // request.timestamp
+        var requestStartedOn = HttpContext.GetTimestamp();
+
+        var removedToken = await TokenUtils.RedeemTokenAsync(_earthDb, ResultsEF.Builder.Null, _objectStore, accountId, tokenId, requestStartedOn, _staticData, cancellationToken);
+
+        if (removedToken is not null)
+        {
+            return TypedResults.Ok(new EarthApiResponse<Token>(TokenToApiResponse(removedToken)));
+        }
+        else
+        {
+            return TypedResults.BadRequest();
+        }
+    }
+
+    private static Token TokenToApiResponse(TokenEF token)
+    {
+        Dictionary<string, string> properties = [with(StringComparer.Ordinal)];
+        switch (token)
+        {
+            case JournalItemUnlockedTokenEF journalItemUnlocked:
+                properties["itemid"] = journalItemUnlocked.ItemId.ToString();
+                break;
+        }
+
+        var rewards = token switch
+        {
+            LevelUpTokenEF levelUp => Rewards.FromDBRewardsModel(levelUp.Rewards).SetLevel(levelUp.Level),
+            DailyLoginTokenEF dailyLogin => Rewards.FromDBRewardsModel(dailyLogin.Rewards),
+            _ => new Rewards(),
+        };
+
+        var lifetime = token switch
+        {
+            LevelUpTokenEF => TokenLifetime.TRANSIENT,
+            JournalItemUnlockedTokenEF => TokenLifetime.PERSISTENT,
+            DailyLoginTokenEF => TokenLifetime.TRANSIENT,
+            _ => throw new InvalidDataException($"Unknown Token type '{token?.GetType()?.ToString() ?? null}'"),
+        };
+
+        return new Token(
+            TokenType.FromDb(token),
+            properties,
+            rewards.ToApiResponse(),
+            lifetime
+        );
+    }
+}

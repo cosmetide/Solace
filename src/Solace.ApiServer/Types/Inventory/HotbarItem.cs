@@ -1,8 +1,8 @@
 ﻿namespace Solace.ApiServer.Types.Inventory;
 
-public sealed record HotbarItem(
-     string Id,
+internal sealed record HotbarItem(
+     Guid Id,
      int Count,
-     string? InstanceId,
+     Guid? InstanceId,
      float? Health
 );

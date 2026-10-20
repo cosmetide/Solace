@@ -3,8 +3,8 @@ using System.Text.Json.Serialization;
 
 namespace Solace.ApiServer.Types.Common;
 
-[JsonConverter(typeof(JsonStringEnumConverter))]
-public enum Rarity
+[JsonConverter(typeof(JsonStringEnumConverter<Rarity>))]
+internal enum Rarity
 {
     [JsonStringEnumMemberName("Common")] COMMON,
     [JsonStringEnumMemberName("Uncommon")] UNCOMMON,
@@ -14,20 +14,22 @@ public enum Rarity
     [JsonStringEnumMemberName("oobe")] OOBE,
 }
 
-public static class RarityExtensions
+#pragma warning disable MA0048 // File name must match type name
+internal static class RarityExtensions
+#pragma warning restore MA0048 // File name must match type name
 {
     extension(Rarity)
     {
-        public static Rarity FromStaticData(StaticData.Catalog.ItemsCatalogR.Item.RarityE rarity)
+        public static Rarity FromStaticData(StaticData.Catalog.ItemsCatalogR.ItemRarity rarity)
             => rarity switch
             {
-                StaticData.Catalog.ItemsCatalogR.Item.RarityE.COMMON => Rarity.COMMON,
-                StaticData.Catalog.ItemsCatalogR.Item.RarityE.UNCOMMON => Rarity.UNCOMMON,
-                StaticData.Catalog.ItemsCatalogR.Item.RarityE.RARE => Rarity.RARE,
-                StaticData.Catalog.ItemsCatalogR.Item.RarityE.EPIC => Rarity.EPIC,
-                StaticData.Catalog.ItemsCatalogR.Item.RarityE.LEGENDARY => Rarity.LEGENDARY,
-                StaticData.Catalog.ItemsCatalogR.Item.RarityE.OOBE => Rarity.OOBE,
-                _ => throw new InvalidEnumArgumentException(nameof(rarity), (int)rarity, typeof(StaticData.Catalog.ItemsCatalogR.Item.RarityE)),
+                StaticData.Catalog.ItemsCatalogR.ItemRarity.COMMON => Rarity.COMMON,
+                StaticData.Catalog.ItemsCatalogR.ItemRarity.UNCOMMON => Rarity.UNCOMMON,
+                StaticData.Catalog.ItemsCatalogR.ItemRarity.RARE => Rarity.RARE,
+                StaticData.Catalog.ItemsCatalogR.ItemRarity.EPIC => Rarity.EPIC,
+                StaticData.Catalog.ItemsCatalogR.ItemRarity.LEGENDARY => Rarity.LEGENDARY,
+                StaticData.Catalog.ItemsCatalogR.ItemRarity.OOBE => Rarity.OOBE,
+                _ => throw new InvalidEnumArgumentException(nameof(rarity), (int)rarity, typeof(StaticData.Catalog.ItemsCatalogR.ItemRarity)),
             };
 
         public static Rarity FromTappable(Utils.TappablesManager.Tappable.RarityE rarity)

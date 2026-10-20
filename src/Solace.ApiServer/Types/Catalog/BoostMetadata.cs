@@ -2,7 +2,7 @@
 
 namespace Solace.ApiServer.Types.Catalog;
 
-public sealed record BoostMetadata(
+internal sealed record BoostMetadata(
     string Name,
     string Type,
     string Attribute,

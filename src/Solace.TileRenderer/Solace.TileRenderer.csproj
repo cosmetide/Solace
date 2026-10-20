@@ -1,29 +1,60 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
     <OutputType>Exe</OutputType>
     <AssemblyName>TileRenderer</AssemblyName>
+    <PublishTrimmed>true</PublishTrimmed>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+  </PropertyGroup>
+
+  <Target Name="MoveDependenciesToShared" AfterTargets="Publish" Condition="'$(UseSharedLibs)' == 'true'">
+
+    <PropertyGroup>
+      <SharedLibsDir>$([System.IO.Path]::GetFullPath('$(PublishDir)../shared_libs'))/</SharedLibsDir>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <FilesToMove Include="$(PublishDir)*.dll;$(PublishDir)*.pdb" Exclude="$(PublishDir)$(TargetName).dll;$(PublishDir)$(TargetName).pdb" />
+    </ItemGroup>
+
+    <MakeDir Directories="$(SharedLibsDir)" />
+
+    <Copy SourceFiles="@(FilesToMove)" DestinationFolder="$(SharedLibsDir)" SkipUnchangedFiles="true" Retries="5" RetryDelayMilliseconds="500" />
+
+    <Delete Files="@(FilesToMove)" />
+
+  </Target>
+
+  <PropertyGroup Condition="'$(UseSharedLibs)' == 'true'">
+    <DefineConstants>$(DefineConstants);USE_SHARED_LIBS</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="CommandLineParser" Version="2.9.1" />
-    <PackageReference Include="NetTopologySuite.IO.VectorTiles.Mapbox" Version="1.1.0" />
-    <PackageReference Include="Npgsql" Version="10.0.2" />
-    <PackageReference Include="Serilog" Version="4.3.1" />
-    <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
-    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
-    <PackageReference Include="Serilog.Sinks.Http" Version="9.2.1" />
-    <PackageReference Include="SkiaSharp" Version="3.119.2" />
-    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.119.2" />
-    <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="3.119.2" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Solace.EventBus.Client\Solace.EventBus.Client.csproj" />
-    <ProjectReference Include="..\Solace.StaticData\Solace.StaticData.csproj" />
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="NetTopologySuite.Features" />
+    <PackageReference Include="Npgsql" />
+    <PackageReference Include="SkiaSharp" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" />
+    <PackageReference Include="SkiaSharp.NativeAssets.macOS" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Win32" />
+    <PackageReference Include="Grpc.Tools">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="../Protos/vector_tile.proto" GrpcServices="None" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Solace.ServiceDefaults/Solace.ServiceDefaults.csproj" />
+    <ProjectReference Include="../Solace.EventBus.Client/Solace.EventBus.Client.csproj" />
+    <ProjectReference Include="../Solace.StaticData/Solace.StaticData.csproj" />
   </ItemGroup>
 
   <ItemGroup>

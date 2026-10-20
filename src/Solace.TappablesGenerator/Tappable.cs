@@ -1,47 +1,49 @@
-﻿using System.ComponentModel;
-using static Solace.TappablesGenerator.Tappable;
+using System.ComponentModel;
+using System.Text.Json.Serialization;
 
 namespace Solace.TappablesGenerator;
 
-public sealed record Tappable(
+internal sealed record Tappable(
     Guid Id,
     float Lat,
     float Lon,
-    long SpawnTime,
-    long ValidFor,
+    DateTimeOffset SpawnTime,
+    TimeSpan ValidFor,
     string Icon,
-    RarityE Rarity,
-    Item[] Items
-)
-{
-    public enum RarityE
-    {
-        COMMON,
-        UNCOMMON,
-        RARE,
-        EPIC,
-        LEGENDARY
-    }
+    TappableRarity Rarity,
+    TappableItem[] Items
+);
 
-    public sealed record Item(
-        string Id,
-        int Count
-    );
+#pragma warning disable MA0048 // File name must match type name
+[JsonConverter(typeof(JsonStringEnumConverter<TappableRarity>))]
+internal enum TappableRarity
+{
+    COMMON,
+    UNCOMMON,
+    RARE,
+    EPIC,
+    LEGENDARY
 }
 
-public static class TappableRarityExtensions
+internal sealed record TappableItem(
+    Guid Id,
+    int Count
+);
+
+internal static class TappableRarityExtensions
 {
-    extension(Tappable.RarityE)
+    extension(TappableRarity)
     {
-        public static Tappable.RarityE FromStaticData(StaticData.Catalog.ItemsCatalogR.Item.RarityE rarity)
+        public static TappableRarity FromStaticData(StaticData.Catalog.ItemsCatalogR.ItemRarity rarity)
             => rarity switch
             {
-                StaticData.Catalog.ItemsCatalogR.Item.RarityE.COMMON => Tappable.RarityE.COMMON,
-                StaticData.Catalog.ItemsCatalogR.Item.RarityE.UNCOMMON => Tappable.RarityE.UNCOMMON,
-                StaticData.Catalog.ItemsCatalogR.Item.RarityE.RARE => Tappable.RarityE.RARE,
-                StaticData.Catalog.ItemsCatalogR.Item.RarityE.EPIC => Tappable.RarityE.EPIC,
-                StaticData.Catalog.ItemsCatalogR.Item.RarityE.LEGENDARY => Tappable.RarityE.LEGENDARY,
-                _ => throw new InvalidEnumArgumentException(nameof(rarity), (int)rarity, typeof(StaticData.Catalog.ItemsCatalogR.Item.RarityE)),
+                StaticData.Catalog.ItemsCatalogR.ItemRarity.COMMON => TappableRarity.COMMON,
+                StaticData.Catalog.ItemsCatalogR.ItemRarity.UNCOMMON => TappableRarity.UNCOMMON,
+                StaticData.Catalog.ItemsCatalogR.ItemRarity.RARE => TappableRarity.RARE,
+                StaticData.Catalog.ItemsCatalogR.ItemRarity.EPIC => TappableRarity.EPIC,
+                StaticData.Catalog.ItemsCatalogR.ItemRarity.LEGENDARY => TappableRarity.LEGENDARY,
+                _ => throw new InvalidEnumArgumentException(nameof(rarity), (int)rarity, typeof(StaticData.Catalog.ItemsCatalogR.ItemRarity)),
             };
     }
 }
+#pragma warning restore MA0048 // File name must match type name

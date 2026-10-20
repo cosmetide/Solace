@@ -4,8 +4,8 @@ namespace Solace.Buildplate.Connector.Model;
 
 public sealed record InventoryAddItemMessage(
      Guid PlayerId,
-     string ItemId,
+     Guid ItemId,
      int Count,
-     string? InstanceId,
+     Guid? InstanceId,
      int Wear
 );

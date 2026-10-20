@@ -1,4 +1,4 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 using Solace.ApiServer.Types.Common;
 using static Solace.ApiServer.Types.Buildplates.BuildplateInstance;
 
@@ -14,22 +14,26 @@ internal sealed record BuildplateInstance(
     ApplicationStatusE ApplicationStatus,
     ServerStatusE ServerStatus,
     string Metadata,
-    GameplayMetadataR GameplayMetadata,
     string RoleInstance,    // TODO: find out what this is
+    GameplayMetadataR GameplayMetadata,
     Coordinate HostCoordinate
 )
 {
-    [JsonConverter(typeof(JsonStringEnumConverter))]
+    [JsonConverter(typeof(JsonStringEnumConverter<ApplicationStatusE>))]
     internal enum ApplicationStatusE
     {
         [JsonStringEnumMemberName("Unknown")] UNKNOWN,
-        [JsonStringEnumMemberName("Ready")] READY
+        [JsonStringEnumMemberName("Ready")] READY,
     }
 
-    [JsonConverter(typeof(JsonStringEnumConverter))]
+    [JsonConverter(typeof(JsonStringEnumConverter<ServerStatusE>))]
     internal enum ServerStatusE
     {
-        [JsonStringEnumMemberName("Running")] RUNNING
+        [JsonStringEnumMemberName("Running")] RUNNING,
+        [JsonStringEnumMemberName("Creating")] CREATING,
+        [JsonStringEnumMemberName("Queued")] QUEUED,
+        [JsonStringEnumMemberName("Inactive")] INACTIVE,
+        [JsonStringEnumMemberName("Unknown")] UNKNOWN,
     }
 
     internal sealed record GameplayMetadataR(
@@ -49,14 +53,14 @@ internal sealed record BuildplateInstance(
         Dictionary<string, object> BreakableItemToItemLootMap    // TODO: find out what this is
     )
     {
-        [JsonConverter(typeof(JsonStringEnumConverter))]
+        [JsonConverter(typeof(JsonStringEnumConverter<GameplayModeE>))]
         internal enum GameplayModeE
         {
 #pragma warning disable CA1707 // Identifiers should not contain underscores
             [JsonStringEnumMemberName("Buildplate")] BUILDPLATE,
             [JsonStringEnumMemberName("BuildplatePlay")] BUILDPLATE_PLAY,
             [JsonStringEnumMemberName("SharedBuildplatePlay")] SHARED_BUILDPLATE_PLAY,
-            [JsonStringEnumMemberName("Encounter")] ENCOUNTER
+            [JsonStringEnumMemberName("Encounter")] ENCOUNTER,
 #pragma warning restore CA1707 // Identifiers should not contain underscores
         }
     }

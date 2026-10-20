@@ -1,20 +1,19 @@
 ﻿using System.Diagnostics;
-using Solace.Common.Utils;
-using Solace.DB.Models.Player.Workshop;
+using Solace.Db.Earth.Models.Player.Workshop;
 using Solace.StaticData;
 
 namespace Solace.ApiServer.Utils;
 
-public static class SmeltingCalculator
+internal static class SmeltingCalculator
 {
-    public static State CalculateState(long currentTime, SmeltingSlot.ActiveJobR activeJob, SmeltingSlot.BurningR? burning, Catalog catalog)
+    public static State CalculateState(DateTimeOffset currentTime, SmeltingSlotEF.ActiveSmeltingJob activeJob, SmeltingSlotEF.BurningR? burning, Catalog catalog)
     {
-        Catalog.RecipesCatalogR.SmeltingRecipe? recipe = catalog.RecipesCatalog.GetSmeltingRecipe(activeJob.RecipeId);
+        var recipe = catalog.RecipesCatalog.GetSmeltingRecipe(activeJob.RecipeId);
         Debug.Assert(recipe is not null);
 
-        int totalHeatRequired = recipe.HeatRequired * activeJob.TotalRounds;
-        long totalCompletionTime = activeJob.StartTime + CalculateDurationForHeat(totalHeatRequired, burning, activeJob.AddedFuel);
-        long nextCompletionTime = 0;
+        var totalHeatRequired = recipe.HeatRequired * activeJob.TotalRounds;
+        var totalCompletionTime = activeJob.StartTime + CalculateDurationForHeat(totalHeatRequired, burning, activeJob.AddedFuel);
+        var nextCompletionTime = DateTimeOffset.MinValue;
         int completedRounds;
         if (activeJob.FinishedEarly)
         {
@@ -32,13 +31,13 @@ public static class SmeltingCalculator
             }
         }
 
-        if (completedRounds < activeJob.TotalRounds && nextCompletionTime == 0)
+        if (completedRounds < activeJob.TotalRounds && nextCompletionTime == DateTimeOffset.MinValue)
         {
             throw new InvalidOperationException();
         }
 
-        int availableRounds = completedRounds - activeJob.CollectedRounds;
-        bool completed = completedRounds == activeJob.TotalRounds;
+        var availableRounds = completedRounds - activeJob.CollectedRounds;
+        var completed = completedRounds == activeJob.TotalRounds;
 
         InputItem input;
         if (activeJob.Input.Count != activeJob.TotalRounds)
@@ -60,19 +59,19 @@ public static class SmeltingCalculator
             input = new InputItem(activeJob.Input.Id, activeJob.Input.Count - completedRounds, []);
         }
 
-        int consumedAddedFuelCount = 0;
-        long fuelEndTime = completed ? totalCompletionTime : currentTime;
-        SmeltingSlot.Fuel currentFuel;
+        var consumedAddedFuelCount = 0;
+        var fuelEndTime = completed ? totalCompletionTime : currentTime;
+        SmeltingSlotEF.Fuel currentFuel;
         int currentFuelTotalHeat;
-        long burnStartTime;
-        long burnEndTime;
+        DateTimeOffset burnStartTime;
+        DateTimeOffset burnEndTime;
 
         if (burning is not null)
         {
             currentFuel = burning.Fuel;
             currentFuelTotalHeat = burning.RemainingHeat;
             burnStartTime = activeJob.StartTime;
-            burnEndTime = burnStartTime + burning.RemainingHeat * 1000 / burning.Fuel.HeatPerSecond;
+            burnEndTime = burnStartTime + TimeSpan.FromMilliseconds(burning.RemainingHeat * 1000 / burning.Fuel.HeatPerSecond);
         }
         else
         {
@@ -83,9 +82,9 @@ public static class SmeltingCalculator
 
             currentFuel = activeJob.AddedFuel;
             consumedAddedFuelCount = 1;
-            currentFuelTotalHeat = currentFuel.HeatPerSecond * currentFuel.BurnDuration;
+            currentFuelTotalHeat = currentFuel.HeatPerSecond * (int)currentFuel.BurnDuration.TotalSeconds;
             burnStartTime = activeJob.StartTime;
-            burnEndTime = burnStartTime + currentFuel.BurnDuration * 1000;
+            burnEndTime = burnStartTime + currentFuel.BurnDuration;
         }
 
         while (burnEndTime < fuelEndTime)
@@ -98,9 +97,9 @@ public static class SmeltingCalculator
             totalHeatRequired -= currentFuelTotalHeat;
             currentFuel = activeJob.AddedFuel;
             consumedAddedFuelCount++;
-            currentFuelTotalHeat = currentFuel.HeatPerSecond * currentFuel.BurnDuration;
+            currentFuelTotalHeat = currentFuel.HeatPerSecond * (int)currentFuel.BurnDuration.TotalSeconds;
             burnStartTime = burnEndTime;
-            burnEndTime = burnStartTime + currentFuel.BurnDuration * 1000;
+            burnEndTime = burnStartTime + currentFuel.BurnDuration;
         }
 
         if (totalHeatRequired < 0)
@@ -111,7 +110,7 @@ public static class SmeltingCalculator
         int remainingHeat;
         if (!completed)
         {
-            remainingHeat = (int)(currentFuelTotalHeat * (burnEndTime - fuelEndTime)) / (currentFuel.BurnDuration * 1000);
+            remainingHeat = (int)((burnEndTime - fuelEndTime) * currentFuelTotalHeat / currentFuel.BurnDuration);
         }
         else
         {
@@ -123,7 +122,7 @@ public static class SmeltingCalculator
             remainingHeat = currentFuelTotalHeat - totalHeatRequired;
         }
 
-        SmeltingSlot.Fuel? remainingAddedFuel;
+        SmeltingSlotEF.Fuel? remainingAddedFuel;
         if (activeJob.AddedFuel is null)
         {
             if (consumedAddedFuelCount > 0)
@@ -147,24 +146,24 @@ public static class SmeltingCalculator
                     throw new InvalidOperationException();
                 }
 
-                remainingAddedFuel = new SmeltingSlot.Fuel(new InputItem(activeJob.AddedFuel.Item.Id, activeJob.AddedFuel.Item.Count - consumedAddedFuelCount, activeJob.AddedFuel.Item.Instances[consumedAddedFuelCount..]), activeJob.AddedFuel.BurnDuration, activeJob.AddedFuel.HeatPerSecond);
+                remainingAddedFuel = new SmeltingSlotEF.Fuel(new InputItem(activeJob.AddedFuel.Item.Id, activeJob.AddedFuel.Item.Count - consumedAddedFuelCount, activeJob.AddedFuel.Item.Instances[consumedAddedFuelCount..]), activeJob.AddedFuel.BurnDuration, activeJob.AddedFuel.HeatPerSecond);
             }
             else
             {
-                remainingAddedFuel = new SmeltingSlot.Fuel(new InputItem(activeJob.AddedFuel.Item.Id, activeJob.AddedFuel.Item.Count - consumedAddedFuelCount, []), activeJob.AddedFuel.BurnDuration, activeJob.AddedFuel.HeatPerSecond);
+                remainingAddedFuel = new SmeltingSlotEF.Fuel(new InputItem(activeJob.AddedFuel.Item.Id, activeJob.AddedFuel.Item.Count - consumedAddedFuelCount, []), activeJob.AddedFuel.BurnDuration, activeJob.AddedFuel.HeatPerSecond);
             }
         }
 
-        SmeltingSlot.Fuel currentBurningFuel;
+        SmeltingSlotEF.Fuel currentBurningFuel;
         if (consumedAddedFuelCount > 0)
         {
             if (activeJob.AddedFuel!.Item.Instances.Length > 0)
             {
-                currentBurningFuel = new SmeltingSlot.Fuel(new InputItem(activeJob.AddedFuel.Item.Id, 1, [activeJob.AddedFuel.Item.Instances[consumedAddedFuelCount - 1]]), activeJob.AddedFuel.BurnDuration, activeJob.AddedFuel.HeatPerSecond);
+                currentBurningFuel = new SmeltingSlotEF.Fuel(new InputItem(activeJob.AddedFuel.Item.Id, 1, [activeJob.AddedFuel.Item.Instances[consumedAddedFuelCount - 1]]), activeJob.AddedFuel.BurnDuration, activeJob.AddedFuel.HeatPerSecond);
             }
             else
             {
-                currentBurningFuel = new SmeltingSlot.Fuel(new InputItem(activeJob.AddedFuel.Item.Id, 1, []), activeJob.AddedFuel.BurnDuration, activeJob.AddedFuel.HeatPerSecond);
+                currentBurningFuel = new SmeltingSlotEF.Fuel(new InputItem(activeJob.AddedFuel.Item.Id, 1, []), activeJob.AddedFuel.BurnDuration, activeJob.AddedFuel.HeatPerSecond);
             }
         }
         else
@@ -189,37 +188,37 @@ public static class SmeltingCalculator
         );
     }
 
-    private static int CalculateDurationForHeat(int requiredHeat, SmeltingSlot.BurningR? burning, SmeltingSlot.Fuel? addedFuel)
+    private static TimeSpan CalculateDurationForHeat(int requiredHeat, SmeltingSlotEF.BurningR? burning, SmeltingSlotEF.Fuel? addedFuel)
     {
-        int duration = 0;
+        var duration = TimeSpan.Zero;
         if (burning is not null)
         {
             if (burning.RemainingHeat >= requiredHeat)
             {
-                duration += requiredHeat * 1000 / burning.Fuel.HeatPerSecond;
+                duration += TimeSpan.FromMilliseconds(requiredHeat * 1000 / burning.Fuel.HeatPerSecond);
                 requiredHeat = 0;
             }
             else
             {
-                duration += burning.RemainingHeat * 1000 / burning.Fuel.HeatPerSecond;
+                duration += TimeSpan.FromMilliseconds(burning.RemainingHeat * 1000 / burning.Fuel.HeatPerSecond);
                 requiredHeat -= burning.RemainingHeat;
             }
         }
 
         if (addedFuel is not null)
         {
-            for (int count = 0; count < addedFuel.Item.Count; count++)
+            for (var count = 0; count < addedFuel.Item.Count; count++)
             {
-                if (requiredHeat < addedFuel.HeatPerSecond * addedFuel.BurnDuration)
+                if (requiredHeat < addedFuel.HeatPerSecond * addedFuel.BurnDuration.TotalSeconds)
                 {
-                    duration += requiredHeat * 1000 / addedFuel.HeatPerSecond;
+                    duration += TimeSpan.FromMilliseconds(requiredHeat * 1000 / addedFuel.HeatPerSecond);
                     requiredHeat = 0;
                     break;
                 }
                 else
                 {
-                    duration += addedFuel.BurnDuration * 1000;
-                    requiredHeat -= addedFuel.HeatPerSecond * addedFuel.BurnDuration;
+                    duration += addedFuel.BurnDuration;
+                    requiredHeat -= addedFuel.HeatPerSecond * (int)addedFuel.BurnDuration.TotalSeconds;
                 }
             }
         }
@@ -232,58 +231,58 @@ public static class SmeltingCalculator
         return duration;
     }
 
-    public sealed record State(
+    internal sealed record State(
         int CompletedRounds,
         int AvailableRounds,
         int TotalRounds,
         InputItem Input,
         State.OutputItem Output,
-        long NextCompletionTime,
-        long TotalCompletionTime,
-        SmeltingSlot.Fuel? RemainingAddedFuel,
-        SmeltingSlot.Fuel CurrentBurningFuel,
+        DateTimeOffset NextCompletionTime,
+        DateTimeOffset TotalCompletionTime,
+        SmeltingSlotEF.Fuel? RemainingAddedFuel,
+        SmeltingSlotEF.Fuel CurrentBurningFuel,
         int RemainingHeat,
-        long BurnStartTime,
-        long BurnEndTime,
+        DateTimeOffset BurnStartTime,
+        DateTimeOffset BurnEndTime,
         bool Completed
     )
     {
-        public sealed record OutputItem(
-            string Id,
+        internal sealed record OutputItem(
+            Guid Id,
             int Count
         );
     }
 
     // TODO: make this configurable
-    public static FinishPrice CalculateFinishPrice(int remainingTime)
+    public static FinishPrice CalculateFinishPrice(TimeSpan remainingTime)
     {
-        if (remainingTime < 0)
+        if (remainingTime < TimeSpan.Zero)
         {
             throw new ArgumentException($"{nameof(remainingTime)} is negative.", nameof(remainingTime));
         }
 
-        int periods = remainingTime / 10000;
-        if (remainingTime % 10000 > 0)
+        var periods = (int)remainingTime.TotalSeconds / 10;
+        if ((int)remainingTime.TotalSeconds % 10 > 0)
         {
             periods = periods + 1;
         }
 
-        int price = periods * 5;
-        int changesAt = (periods - 1) * 10000;
-        int validFor = remainingTime - changesAt;
+        var price = periods * 5;
+        var changesAt = TimeSpan.FromMilliseconds((periods - 1) * 10000);
+        var validFor = remainingTime - changesAt;
 
         return new FinishPrice(price, validFor);
     }
 
-    public sealed record FinishPrice(
+    internal sealed record FinishPrice(
         int Price,
-        int ValidFor
+        TimeSpan ValidFor
     );
 
     // TODO: make this configurable
     public static int CalculateUnlockPrice(int slotIndex)
     {
-        if (slotIndex < 1 || slotIndex > 3)
+        if (slotIndex is < 1 or > 3)
         {
             throw new ArgumentOutOfRangeException(nameof(slotIndex));
         }

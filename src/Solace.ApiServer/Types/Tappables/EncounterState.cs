@@ -2,12 +2,12 @@
 
 namespace Solace.ApiServer.Types.Tappables;
 
-public sealed record EncounterState(
+internal sealed record EncounterState(
     EncounterState.ActiveEncounterStateE ActiveEncounterState
 )
 {
-    [JsonConverter(typeof(JsonStringEnumConverter))]
-    public enum ActiveEncounterStateE
+    [JsonConverter(typeof(JsonStringEnumConverter<ActiveEncounterStateE>))]
+    internal enum ActiveEncounterStateE
     {
         [JsonStringEnumMemberName("Pristine")] PRISTINE,
         [JsonStringEnumMemberName("Dirty")] DIRTY,

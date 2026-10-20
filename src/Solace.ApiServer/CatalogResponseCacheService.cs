@@ -1,15 +1,15 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Caching.Memory;
 using Solace.StaticData;
-using CICIBIEType = Solace.StaticData.Catalog.ItemsCatalogR.Item.BoostInfoR.Effect.TypeE;
-using CICIBIType = Solace.StaticData.Catalog.ItemsCatalogR.Item.BoostInfoR.TypeE;
-using CICICategory = Solace.StaticData.Catalog.ItemsCatalogR.Item.CategoryE;
+using CICIBIEType = Solace.StaticData.Catalog.ItemsCatalogR.Item.BoostEffectType;
+using CICIBIType = Solace.StaticData.Catalog.ItemsCatalogR.Item.BoostInfoType;
+using CICICategory = Solace.StaticData.Catalog.ItemsCatalogR.ItemCategory;
 using CICIJEBehavior = Solace.StaticData.Catalog.ItemsCatalogR.Item.JournalEntryR.BehaviorE;
 using CICIJEBiome = Solace.StaticData.Catalog.ItemsCatalogR.Item.JournalEntryR.BiomeE;
-using CICIType = Solace.StaticData.Catalog.ItemsCatalogR.Item.TypeE;
-using CICIUseType = Solace.StaticData.Catalog.ItemsCatalogR.Item.UseTypeE;
+using CICIType = Solace.StaticData.Catalog.ItemsCatalogR.ItemType;
+using CICIUseType = Solace.StaticData.Catalog.ItemsCatalogR.ItemUseType;
 using CIJGCJGParentCollection = Solace.StaticData.Catalog.ItemJournalGroupsCatalogR.JournalGroup.ParentCollectionE;
-using CRCCRCategory = Solace.StaticData.Catalog.RecipesCatalogR.CraftingRecipe.CategoryE;
+using CRCCRCategory = Solace.StaticData.Catalog.RecipesCatalogR.CraftingRecipeCategory;
 using ItemsCatalog = Solace.ApiServer.Types.Catalog.ItemsCatalog;
 using Solace.ApiServer.Types.Common;
 using Solace.ApiServer.Types.Catalog;
@@ -17,12 +17,12 @@ using Solace.ApiServer.Utils;
 
 namespace Solace.ApiServer;
 
-public sealed class CatalogResponseCacheService
+internal sealed class CatalogResponseCacheService
 {
     private readonly Catalog _catalog;
     private readonly IMemoryCache _cache;
 
-    public CatalogResponseCacheService(StaticData.StaticData staticData, IMemoryCache cache)
+    public CatalogResponseCacheService(StaticData.StaticDataProvider staticData, IMemoryCache cache)
     {
         _catalog = staticData.Catalog;
         _cache = cache;
@@ -73,9 +73,9 @@ public sealed class CatalogResponseCacheService
 
     private ItemsCatalog CreateItemsCatalog()
     {
-        ItemsCatalog.ItemR[] items = [.. _catalog.ItemsCatalog.Items.Select(item =>
+        ItemsCatalogItem[] items = [.. _catalog.ItemsCatalog.Items.Select(item =>
         {
-            string categoryString = item.Category switch
+            var categoryString = item.Category switch
             {
                 CICICategory.CONSTRUCTION => "Construction",
                 CICICategory.EQUIPMENT => "Equipment",
@@ -97,7 +97,7 @@ public sealed class CatalogResponseCacheService
                 _ => throw new UnreachableException(),
             };
 
-            string typeString = item.Type switch
+            var typeString = item.Type switch
             {
                 CICIType.BLOCK => "Block",
                 CICIType.ITEM => "Item",
@@ -109,7 +109,7 @@ public sealed class CatalogResponseCacheService
                 _ => throw new UnreachableException(),
             };
 
-            string useTypeString = item.UseType switch
+            var useTypeString = item.UseType switch
             {
                 CICIUseType.NONE => "None",
 
@@ -123,7 +123,7 @@ public sealed class CatalogResponseCacheService
                 _ => throw new UnreachableException(),
             };
 
-            string alternativeUseTypeString = item.AlternativeUseType switch
+            var alternativeUseTypeString = item.AlternativeUseType switch
             {
                 CICIUseType.NONE => "None",
 
@@ -179,14 +179,14 @@ public sealed class CatalogResponseCacheService
                 mobDamage = 0;
             }
 
-            ItemsCatalog.ItemR.ItemData.BlockMetadataR? blockMetadata;
+            ItemsCatalogItemData.BlockMetadataR? blockMetadata;
             if (item.BlockInfo is not null)
             {
-                blockMetadata = new ItemsCatalog.ItemR.ItemData.BlockMetadataR(item.BlockInfo.BreakingHealth, item.BlockInfo.EfficiencyCategory);
+                blockMetadata = new ItemsCatalogItemData.BlockMetadataR(item.BlockInfo.BreakingHealth, item.BlockInfo.EfficiencyCategory);
             }
             else if (item.MobInfo is not null)
             {
-                blockMetadata = new ItemsCatalog.ItemR.ItemData.BlockMetadataR(item.MobInfo.Health, "instant");
+                blockMetadata = new ItemsCatalogItemData.BlockMetadataR(item.MobInfo.Health, "instant");
             }
             else
             {
@@ -196,14 +196,14 @@ public sealed class CatalogResponseCacheService
             BoostMetadata? boostMetadata;
             if (item.BoostInfo is not null)
             {
-                string boostTypeString = item.BoostInfo.Type switch
+                var boostTypeString = item.BoostInfo.Type switch
                 {
                     CICIBIType.POTION => "Potion",
                     CICIBIType.INVENTORY_ITEM => "InventoryItem",
                     _ => throw new UnreachableException(),
                 };
 
-                string boostAttributeString = item.BoostInfo.Effects[0].Type switch
+                var boostAttributeString = item.BoostInfo.Effects[0].Type switch
                 {
                     CICIBIEType.ADVENTURE_XP => "ItemExperiencePoints",
                     CICIBIEType.CRAFTING => "Crafting",
@@ -229,7 +229,7 @@ public sealed class CatalogResponseCacheService
                     TimeFormatter.FormatDuration(item.BoostInfo.Duration),
                     true,
                     item.BoostInfo.Level,
-                    [.. item.BoostInfo.Effects.Select(effect => BoostUtils.BoostEffectToApiResponse(effect, item.BoostInfo.Duration))],
+                    [.. item.BoostInfo.Effects.Select(effect => BoostUtils.BoostEffectToApiResponse(effect, TimeSpan.FromMilliseconds(item.BoostInfo.Duration)))],
                     item.BoostInfo.TriggeredOnDeath ? "Death" : null,
                     null
                 );
@@ -239,10 +239,10 @@ public sealed class CatalogResponseCacheService
                 boostMetadata = null;
             }
 
-            ItemsCatalog.ItemR.ItemData.JournalMetadataR? journalMetadata;
+            ItemsCatalogItemData.JournalMetadataR? journalMetadata;
             if (item.JournalEntry is not null)
             {
-                string behaviorString = item.JournalEntry.Behavior switch
+                var behaviorString = item.JournalEntry.Behavior switch
                 {
                     CICIJEBehavior.NONE => "None",
                     CICIJEBehavior.PASSIVE => "Passive",
@@ -251,7 +251,7 @@ public sealed class CatalogResponseCacheService
                     _ => throw new UnreachableException(),
                 };
 
-                string biomeString = item.JournalEntry.Biome switch
+                var biomeString = item.JournalEntry.Biome switch
                 {
                     CICIJEBiome.NONE => "None",
                     CICIJEBiome.OVERWORLD => "Overworld",
@@ -276,7 +276,7 @@ public sealed class CatalogResponseCacheService
                     _ => throw new UnreachableException(),
                 };
 
-                journalMetadata = new ItemsCatalog.ItemR.ItemData.JournalMetadataR(
+                journalMetadata = new ItemsCatalogItemData.JournalMetadataR(
                     item.JournalEntry.Group,
                     item.Experience.Journal,
                     item.JournalEntry.Order,
@@ -289,9 +289,9 @@ public sealed class CatalogResponseCacheService
                 journalMetadata = null;
             }
 
-            return new ItemsCatalog.ItemR(
+            return new ItemsCatalogItem(
                 item.Id,
-                new ItemsCatalog.ItemR.ItemData(
+                new ItemsCatalogItemData(
                     item.Name,
                     item.Aux,
                     typeString,
@@ -303,7 +303,7 @@ public sealed class CatalogResponseCacheService
                     blockDamage,
                     health,
                     blockMetadata,
-                    new ItemsCatalog.ItemR.ItemData.ItemMetadataR(
+                    new ItemsCatalogItemData.ItemMetadataR(
                         useTypeString,
                         alternativeUseTypeString,
                         mobDamage,
@@ -316,30 +316,30 @@ public sealed class CatalogResponseCacheService
                     ),
                     boostMetadata,
                     journalMetadata,
-                    item.JournalEntry is not null && item.JournalEntry.Sound is not null ? new ItemsCatalog.ItemR.ItemData.AudioMetadataR(
-                        new Dictionary<string, string>() { ["journal"] = item.JournalEntry.Sound },
+                    item.JournalEntry is not null && item.JournalEntry.Sound is not null ? new ItemsCatalogItemData.AudioMetadataR(
+                        new Dictionary<string, string>(StringComparer.Ordinal) { ["journal"] = item.JournalEntry.Sound },
                         item.JournalEntry.Sound
                     ) : null,
-                    new Dictionary<string, object>()
+                    new Dictionary<string, object>(StringComparer.Ordinal)
                 ),
                 categoryString,
                 Types.Common.Rarity.FromStaticData(item.Rarity),
                 1,
                 item.Stackable,
                 item.FuelInfo is not null ? new Types.Common.BurnRate(item.FuelInfo.BurnTime, item.FuelInfo.HeatPerSecond) : null,
-                item.FuelInfo is not null && item.FuelInfo.ReturnItemId is not null ? [new ItemsCatalog.ItemR.ReturnItem(item.FuelInfo.ReturnItemId, 1)] : [],
-                item.ConsumeInfo is not null && item.ConsumeInfo.ReturnItemId is not null ? [new ItemsCatalog.ItemR.ReturnItem(item.ConsumeInfo.ReturnItemId, 1)] : [],
+                item.FuelInfo is not null && item.FuelInfo.ReturnItemId is not null ? [new ItemsCatalogItem.ReturnItem(item.FuelInfo.ReturnItemId.Value, 1)] : [],
+                item.ConsumeInfo is not null && item.ConsumeInfo.ReturnItemId is not null ? [new ItemsCatalogItem.ReturnItem(item.ConsumeInfo.ReturnItemId.Value, 1)] : [],
                 item.Experience.Tappable,
-                new Dictionary<string, int?>() { ["tappable"] = item.Experience.Tappable, ["encounter"] = item.Experience.Encounter, ["crafting"] = item.Experience.Crafting },
+                new Dictionary<string, int?>(StringComparer.Ordinal) { ["tappable"] = item.Experience.Tappable, ["encounter"] = item.Experience.Encounter, ["crafting"] = item.Experience.Crafting },
                 false
             );
         })];
 
-        Dictionary<string, ItemsCatalog.EfficiencyCategory> efficiencyCategories = [];
-        foreach (Catalog.ItemEfficiencyCategoriesCatalogR.EfficiencyCategory efficiencyCategory in _catalog.ItemEfficiencyCategoriesCatalog.EfficiencyCategories)
+        Dictionary<string, ItemsCatalogEfficiencyCategory> efficiencyCategories = [with(StringComparer.Ordinal)];
+        foreach (var efficiencyCategory in _catalog.ItemEfficiencyCategoriesCatalog.EfficiencyCategories)
         {
-            efficiencyCategories[efficiencyCategory.Name] = new ItemsCatalog.EfficiencyCategory(
-                new ItemsCatalog.EfficiencyCategory.EfficiencyMapR(
+            efficiencyCategories[efficiencyCategory.Name] = new ItemsCatalogEfficiencyCategory(
+                new ItemsCatalogEfficiencyCategory.EfficiencyMapR(
                     efficiencyCategory.Hand,
                     efficiencyCategory.Hoe,
                     efficiencyCategory.Axe,
@@ -362,7 +362,7 @@ public sealed class CatalogResponseCacheService
     {
         RecipesCatalog.CraftingRecipe[] crafting = [.. _catalog.RecipesCatalog.Crafting.Select(recipe =>
         {
-            string categoryString = recipe.Category switch
+            var categoryString = recipe.Category switch
             {
                 CRCCRCategory.CONSTRUCTION => "Construction",
                 CRCCRCategory.EQUIPMENT => "Equipment",
@@ -375,9 +375,9 @@ public sealed class CatalogResponseCacheService
                 recipe.Id,
                 categoryString,
                 TimeFormatter.FormatDuration(recipe.Duration * 1000),
-                [.. recipe.Ingredients.Select(ingredient => new RecipesCatalog.CraftingRecipe.Ingredient(ingredient.PossibleItemIds, ingredient.Count))],
-                new RecipesCatalog.CraftingRecipe.OutputR(recipe.Output.ItemId, recipe.Output.Count),
-                [.. recipe.ReturnItems.Select(returnItem => new RecipesCatalog.CraftingRecipe.ReturnItem(returnItem.ItemId, returnItem.Count))],
+                [.. recipe.Ingredients.Select(ingredient => new RecipesCatalog.CraftingRecipeIngredient(ingredient.PossibleItemIds, ingredient.Count))],
+                new RecipesCatalog.CraftingRecipeOutput(recipe.Output.ItemId, recipe.Output.Count),
+                [.. recipe.ReturnItems.Select(returnItem => new RecipesCatalog.CraftingRecipeReturnItem(returnItem.ItemId, returnItem.Count))],
                 false
             );
         })];
@@ -388,8 +388,8 @@ public sealed class CatalogResponseCacheService
                 recipe.Id,
                 recipe.HeatRequired,
                 recipe.Input,
-                new RecipesCatalog.SmeltingRecipe.OutputR(recipe.Output, 1),
-                recipe.ReturnItemId is not null ? [new RecipesCatalog.SmeltingRecipe.ReturnItem(recipe.ReturnItemId, 1)] : [],
+                new RecipesCatalog.SmeltingRecipeOutput(recipe.Output, 1),
+                recipe.ReturnItemId is not null ? [new RecipesCatalog.SmeltingRecipeReturnItem(recipe.ReturnItemId.Value, 1)] : [],
                 false
             );
         })];
@@ -399,10 +399,10 @@ public sealed class CatalogResponseCacheService
 
     private JournalCatalog CreateJournalCatalog()
     {
-        Dictionary<string, JournalCatalog.Item> items = [];
-        foreach (Catalog.ItemJournalGroupsCatalogR.JournalGroup group in _catalog.ItemJournalGroupsCatalog.Groups)
+        Dictionary<string, JournalCatalogItem> items = [with(StringComparer.Ordinal)];
+        foreach (var group in _catalog.ItemJournalGroupsCatalog.Groups)
         {
-            string parentCollectionString = group.ParentCollection switch
+            var parentCollectionString = group.ParentCollection switch
             {
                 CIJGCJGParentCollection.BLOCKS => "Blocks",
                 CIJGCJGParentCollection.ITEMS_CRAFTED => "ItemsCrafted",
@@ -411,7 +411,7 @@ public sealed class CatalogResponseCacheService
                 _ => throw new UnreachableException(),
             };
 
-            items[group.Name] = new JournalCatalog.Item(
+            items[group.Name] = new JournalCatalogItem(
                 group.Id,
                 parentCollectionString,
                 group.Order,

@@ -1,20 +1,24 @@
-﻿using Serilog;
+﻿using Solace.Common;
 using Solace.StaticData;
 
 namespace Solace.ApiServer.Utils;
 
-public static class ItemWear
+internal static partial class ItemWear
 {
-    public static float WearToHealth(string itemId, int wear, Catalog.ItemsCatalogR itemsCatalog)
+    public static float WearToHealth(Guid itemId, int wear, Catalog.ItemsCatalogR itemsCatalog)
     {
-        Catalog.ItemsCatalogR.Item? catalogItem = itemsCatalog.GetItem(itemId);
+        var catalogItem = itemsCatalog.GetItem(itemId);
 
         if (catalogItem is null || catalogItem.ToolInfo is null)
         {
-            Log.Warning("Attempt to get item health for non-tool item {}", itemId);
+            var logger = GlobalLoggerFactory.CreateLogger(nameof(ItemWear));
+            LogHealthForNonTool(logger, itemId);
             return 100.0f;
         }
 
-        return ((catalogItem.ToolInfo.MaxWear - wear) / (float)catalogItem.ToolInfo.MaxWear) * 100.0f;
+        return (catalogItem.ToolInfo.MaxWear - wear) / (float)catalogItem.ToolInfo.MaxWear * 100.0f;
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Attempt to get item health for non-tool item '{ItemId}'")]
+    private static partial void LogHealthForNonTool(ILogger logger, Guid ItemId);
 }

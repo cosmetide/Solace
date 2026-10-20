@@ -1,65 +1,69 @@
-﻿using Serilog;
-using Solace.Common;
+using Microsoft.Extensions.Logging;
 using Solace.Common.Utils;
 using Solace.StaticData;
 
 namespace Solace.TappablesGenerator;
 
-public class TappableGenerator
+internal sealed partial class TappableGenerator
 {
     // TODO: make these configurable
-    private static readonly int MIN_COUNT = 1;
-    private static readonly int MAX_COUNT = 3;
-    private static readonly long MIN_DURATION = 2 * 60 * 1000;
-    private static readonly long MAX_DURATION = 5 * 60 * 1000;
-    private static readonly long MIN_DELAY = 1 * 60 * 1000;
-    private static readonly long MAX_DELAY = 2 * 60 * 1000;
+    private const int MIN_COUNT = 1;
+    private const int MAX_COUNT = 3;
+    private static readonly TimeSpan MIN_DURATION = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan MAX_DURATION = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan MIN_DELAY = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan MAX_DELAY = TimeSpan.FromMinutes(2);
 
-    private readonly StaticData.StaticData _staticData;
+    private readonly StaticData.StaticDataProvider _staticData;
 
     private readonly Random _random;
 
-    public TappableGenerator(StaticData.StaticData staticData)
+    public TappableGenerator(StaticData.StaticDataProvider staticData, ILogger<TappableGenerator> logger)
     {
         _staticData = staticData;
 
         if (_staticData.TappablesConfig.Tappables.Length == 0)
         {
-            Log.Warning("No tappable configs provided");
+            LogNoTappableConfigsProvided(logger);
         }
 
         _random = new Random();
     }
 
-    public static long GetMaxTappableLifetime()
-        => MAX_DELAY + MAX_DURATION + 30 * 1000;
+#pragma warning disable CA1822 // Mark members as static
+    public TimeSpan GetMaxTappableLifetime()
+#pragma warning restore CA1822 // Mark members as static
+        => MAX_DELAY + MAX_DURATION + TimeSpan.FromSeconds(30);
 
-    public IEnumerable<Tappable> GenerateTappables(int tileX, int tileY, long currentTime)
+    public IEnumerable<Tappable> GenerateTappables(int tileX, int tileY, DateTimeOffset currentTime, bool immediateSpawn = false)
     {
         if (_staticData.TappablesConfig.Tappables.Length == 0)
         {
             return [];
         }
 
-        int count = _random.Next(MIN_COUNT, MAX_COUNT + 1);
+#pragma warning disable CA5394 // Do not use insecure randomness - idc
+        var count = _random.Next(MIN_COUNT, MAX_COUNT + 1);
 
         var tappables = new List<Tappable>(count);
         Span<float> tileBounds = stackalloc float[4];
         for (; count > 0; count--)
         {
-            long spawnDelay = _random.NextInt64(MIN_DELAY, MAX_DELAY + 1);
-            long duration = _random.NextInt64(MIN_DURATION, MAX_DURATION + 1);
+            var spawnDelay = immediateSpawn
+                ? TimeSpan.Zero
+                : TimeSpan.FromTicks(_random.NextInt64(MIN_DELAY.Ticks, MAX_DELAY.Ticks + 1));
+            var duration = TimeSpan.FromTicks(_random.NextInt64(MIN_DURATION.Ticks, MAX_DURATION.Ticks + 1));
 
-            TappablesConfig.TappableConfig tappableConfig = _staticData.TappablesConfig.Tappables[_random.Next(0, _staticData.TappablesConfig.Tappables.Length)];
+            var tappableConfig = _staticData.TappablesConfig.Tappables[_random.Next(0, _staticData.TappablesConfig.Tappables.Length)];
 
             GetTileBounds(tileX, tileY, tileBounds);
-            float lat = _random.NextSingle(tileBounds[1], tileBounds[0]);
-            float lon = _random.NextSingle(tileBounds[2], tileBounds[3]);
+            var lat = _random.NextSingle(tileBounds[1], tileBounds[0]);
+            var lon = _random.NextSingle(tileBounds[2], tileBounds[3]);
 
-            int dropSetIndex = _random.Next(0, tappableConfig.DropSets.Select(dropSet => dropSet.Chance).Sum());
+            var dropSetIndex = _random.Next(0, tappableConfig.DropSets.Select(dropSet => dropSet.Chance).Sum());
             TappablesConfig.TappableConfig.DropSetR? dropSet = null;
 
-            foreach (TappablesConfig.TappableConfig.DropSetR dropSet1 in tappableConfig.DropSets)
+            foreach (var dropSet1 in tappableConfig.DropSets)
             {
                 dropSet = dropSet1;
                 dropSetIndex -= dropSet1.Chance;
@@ -74,15 +78,16 @@ public class TappableGenerator
                 throw new InvalidOperationException();
             }
 
-            var items = new List<Tappable.Item>(dropSet.Items.Length);
+            var items = new List<TappableItem>(dropSet.Items.Length);
 
-            foreach (string itemId in dropSet.Items)
+            foreach (var itemId in dropSet.Items)
             {
-                TappablesConfig.TappableConfig.ItemCount itemCount = tappableConfig.ItemCounts[itemId];
-                items.Add(new Tappable.Item(itemId, _random.Next(itemCount.Min, itemCount.Max + 1)));
+                var itemCount = tappableConfig.ItemCounts[itemId];
+                items.Add(new TappableItem(itemId, _random.Next(itemCount.Min, itemCount.Max + 1)));
+#pragma warning restore CA5394 // Do not use insecure randomness
             }
 
-            var rarity = Tappable.RarityE.FromStaticData(items.Max(item => _staticData.Catalog.ItemsCatalog.GetItem(item.Id)!.Rarity));
+            var rarity = TappableRarity.FromStaticData(items.Max(item => _staticData.Catalog.ItemsCatalog.GetItem(item.Id)!.Rarity));
 
             var tappable = new Tappable(
                 Guid.CreateVersion7(),
@@ -110,8 +115,11 @@ public class TappableGenerator
     }
 
     private static float XToLon(float x)
-        => (float)MathE.ToDegrees((x * 2.0d - 1.0d) * double.Pi);
+        => (float)double.RadiansToDegrees((x * 2.0d - 1.0d) * double.Pi);
 
     private static float YToLat(float y)
-        => (float)MathE.ToDegrees(double.Atan(double.Sinh((1.0d - y * 2.0d) * double.Pi)));
+        => (float)double.RadiansToDegrees(double.Atan(double.Sinh((1.0d - y * 2.0d) * double.Pi)));
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "No tappable configs provided")]
+    private static partial void LogNoTappableConfigsProvided(ILogger logger);
 }

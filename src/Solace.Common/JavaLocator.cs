@@ -1,18 +1,17 @@
-﻿using Serilog;
+﻿using BitcoderCZ.IO;
+using Microsoft.Extensions.Logging;
 using Solace.Common.Utils;
 
 namespace Solace.Common;
 
-public static class JavaLocator
+public static partial class JavaLocator
 {
-    public static string Locate(ILogger? logger = null)
+    public static string Locate(ILogger logger)
     {
-        logger ??= Log.Logger;
-
-        logger.Information("Trying to locate Java");
+        LogLocateBegin(logger);
 
         string? javaHome;
-        if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+        if (OperatingSystem.IsWindows())
         {
             javaHome = Environment.GetEnvironmentVariable("JAVA_HOME", EnvironmentVariableTarget.User);
             if (string.IsNullOrWhiteSpace(javaHome))
@@ -27,22 +26,25 @@ public static class JavaLocator
 
         if (!string.IsNullOrEmpty(javaHome))
         {
-            logger.Information("Trying JAVA_HOME");
+            LogTryJavaHome(logger);
+
+            javaHome = Path.GetFullPath(javaHome);
+
             try
             {
-                var file = new FileInfo(Path.Combine(javaHome, "bin", "java"));
+                var file = new AbsoluteFile(Path.Combine(javaHome, "bin", "java"));
                 if (file.CanExecute())
                 {
-                    string path = file.FullName;
-                    logger.Information($"Using Java from JAVA_HOME ({path})");
+                    var path = file.Value;
+                    LogUseJavaHome(logger, path);
                     return path;
                 }
 
-                file = new FileInfo(Path.Combine(javaHome, "bin", "java.exe"));
+                file = new AbsoluteFile(Path.Combine(javaHome, "bin", "java.exe"));
                 if (file.CanExecute())
                 {
-                    string path = file.FullName;
-                    logger.Information($"Using Java from JAVA_HOME ({path})");
+                    var path = file.Value;
+                    LogUseJavaHome(logger, path);
                     return path;
                 }
             }
@@ -51,14 +53,32 @@ public static class JavaLocator
                 // empty
             }
 
-            logger.Information("Java from JAVA_HOME is not suitable (does not exist or cannot be accessed)");
+            LogJavaHomeNotSuitable(logger);
         }
         else
         {
-            logger.Information("JAVA_HOME is not set");
+            LogJavaHomeNotSet(logger);
         }
 
-        logger.Information("Using \"java\"");
+        LogUseJava(logger);
         return "java";
     }
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Trying to locate Java")]
+    private static partial void LogLocateBegin(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Trying JAVA_HOME")]
+    private static partial void LogTryJavaHome(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Using Java from JAVA_HOME ({Path})")]
+    private static partial void LogUseJavaHome(ILogger logger, string Path);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Java from JAVA_HOME is not suitable (does not exist or cannot be accessed)")]
+    private static partial void LogJavaHomeNotSuitable(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "JAVA_HOME is not set")]
+    private static partial void LogJavaHomeNotSet(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Using \"java\"")]
+    private static partial void LogUseJava(ILogger logger);
 }

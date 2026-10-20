@@ -4,7 +4,7 @@ namespace Solace.Buildplate.Connector.Model;
 
 public sealed record InventoryUpdateItemWearMessage(
     Guid PlayerId,
-    string ItemId,
-    string InstanceId,
+    Guid ItemId,
+    Guid InstanceId,
     int Wear
 );

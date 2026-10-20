@@ -1,53 +1,51 @@
 ﻿namespace Solace.ApiServer.Types.Catalog;
 
-public sealed record RecipesCatalog(
+internal sealed record RecipesCatalog(
     RecipesCatalog.CraftingRecipe[] Crafting,
     RecipesCatalog.SmeltingRecipe[] Smelting
 )
 {
-    public sealed record CraftingRecipe(
-        string Id,
+    internal sealed record CraftingRecipe(
+        Guid Id,
         string Category,
         string Duration,
-        CraftingRecipe.Ingredient[] Ingredients,
-        CraftingRecipe.OutputR Output,
-        CraftingRecipe.ReturnItem[] ReturnItems,
+        CraftingRecipeIngredient[] Ingredients,
+        CraftingRecipeOutput Output,
+        CraftingRecipeReturnItem[] ReturnItems,
         bool Deprecated
-    )
-    {
-        public sealed record Ingredient(
-            string[] Items,
-            int Quantity
-        );
+    );
 
-        public sealed record OutputR(
-            string ItemId,
-            int Quantity
-        );
+    internal sealed record CraftingRecipeIngredient(
+        Guid[] Items,
+        int Quantity
+    );
 
-        public sealed record ReturnItem(
-            string Id,
-            int Amount
-        );
-    }
+    internal sealed record CraftingRecipeOutput(
+        Guid ItemId,
+        int Quantity
+    );
 
-    public sealed record SmeltingRecipe(
-        string Id,
+    internal sealed record CraftingRecipeReturnItem(
+        Guid Id,
+        int Amount
+    );
+
+    internal sealed record SmeltingRecipe(
+        Guid Id,
         int HeatRequired,
-        string InputItemId,
-        SmeltingRecipe.OutputR Output,
-        SmeltingRecipe.ReturnItem[] ReturnItems,
-        bool deprecated
-    )
-    {
-        public sealed record OutputR(
-            string ItemId,
-            int Quantity
-        );
+        Guid InputItemId,
+        SmeltingRecipeOutput Output,
+        SmeltingRecipeReturnItem[] ReturnItems,
+        bool Deprecated
+    );
 
-        public sealed record ReturnItem(
-            string Id,
-            int Amount
-        );
-    }
+    internal sealed record SmeltingRecipeOutput(
+        Guid ItemId,
+        int Quantity
+    );
+
+    internal sealed record SmeltingRecipeReturnItem(
+        Guid Id,
+        int Amount
+    );
 }

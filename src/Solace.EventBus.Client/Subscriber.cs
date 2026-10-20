@@ -1,98 +1,200 @@
-﻿namespace Solace.EventBus.Client;
+using System.Collections.Concurrent;
+using System.Threading.Channels;
+using Grpc.Core;
+using Solace.EventBus.Client.Utils;
 
-public sealed class SubscriberListener : ISubscriberListener
+namespace Solace.EventBus.Client;
+
+public sealed class Subscriber : IAsyncDisposable
 {
-    public Func<SubscriberEvent, Task>? OnEvent;
-    public Func<Task>? OnError;
+    private readonly EventBusService.EventBusServiceClient _client;
+    private readonly string _queueName;
+    private readonly Func<SubscriberEvent, CancellationToken, Task> _onEvent;
+    private readonly Func<Exception?, Task> _onError;
 
-    public SubscriberListener()
-    {
-    }
-    public SubscriberListener(Func<SubscriberEvent, Task>? onEvent = null, Func<Task>? onError = null)
-    {
-        OnEvent = onEvent;
-        OnError = onError;
-    }
+    private CancellationTokenSource? _cts;
+    private Task? _loopTask;
+    private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private byte _disposed;
 
-    public Task OnEventAsync(SubscriberEvent @event)
-        => OnEvent?.Invoke(@event) ?? Task.CompletedTask;
+    private SemaphoreSlim? _semaphore;
+    private const int MaxDegreeOfParallelism = 4;
 
-    public Task OnErrorAsync()
-        => OnError?.Invoke() ?? Task.CompletedTask;
-}
+    private readonly ConcurrentDictionary<ulong, ChannelWriter<ReadOnlyMemory<byte>>> _activeStreams = [];
 
-public interface ISubscriberListener
-{
-#pragma warning disable CA1716 // Identifiers should not match keywords
-    Task OnEventAsync(SubscriberEvent @event);
-#pragma warning restore CA1716 // Identifiers should not match keywords
-
-    Task OnErrorAsync();
-}
-
-public sealed class SubscriberEvent
-{
-    public long Timestamp { get; }
-    public string Type { get; }
-    public string Data { get; }
-
-    internal SubscriberEvent(long timestamp, string type, string data)
-    {
-        Timestamp = timestamp;
-        Type = type;
-        Data = data;
-    }
-}
-
-public sealed class Subscriber
-{
-    private readonly EventBusClient _client;
-    private readonly ISubscriberListener _listener;
-
-    internal int ChannelId { get; }
-    internal string QueueName { get; }
-
-    internal Subscriber(EventBusClient client, int channelId, string queueName, ISubscriberListener listener)
+    internal Subscriber(EventBusService.EventBusServiceClient client, string queueName, Func<SubscriberEvent, CancellationToken, Task> onEvent, Func<Exception?, Task> onError)
     {
         _client = client;
-        ChannelId = channelId;
-        QueueName = queueName;
-        _listener = listener;
+        _queueName = queueName;
+        _onEvent = onEvent;
+        _onError = onError;
     }
 
-    public async Task CloseAsync()
+    public async Task StartAsync()
     {
-        _client.RemoveSubscriber(ChannelId);
-        await _client.SendMessageAsync(ChannelId, "CLOSE");
+        _cts = new CancellationTokenSource();
+        _semaphore = new SemaphoreSlim(MaxDegreeOfParallelism);
+
+        var streamCall = _client.Subscribe(new SubscribeRequest { QueueName = _queueName, }, cancellationToken: _cts.Token);
+
+        _loopTask = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var msg in streamCall.ResponseStream.ReadAllAsync(_cts.Token))
+                {
+                    if (msg.SubscriptionReady)
+                    {
+                        _ready.TrySetResult();
+                        continue;
+                    }
+
+                    if (msg.StreamId is not 0)
+                    {
+                        if (_activeStreams.TryGetValue(msg.StreamId, out var existingWriter))
+                        {
+                            if (msg.PayloadCase is EventMessage.PayloadOneofCase.BinaryData && !msg.BinaryData.IsEmpty)
+                            {
+                                await existingWriter.WriteAsync(msg.BinaryData.Memory, _cts.Token);
+                            }
+
+                            if (msg.IsLastChunk)
+                            {
+                                _activeStreams.TryRemove(msg.StreamId, out _);
+                                existingWriter.TryComplete();
+                            }
+
+                            continue;
+                        }
+
+                        var channel = Channel.CreateUnbounded<ReadOnlyMemory<byte>>(new UnboundedChannelOptions
+                        {
+                            SingleWriter = false,
+                            SingleReader = true
+                        });
+
+                        if (msg.PayloadCase is EventMessage.PayloadOneofCase.BinaryData && !msg.BinaryData.IsEmpty)
+                        {
+                            channel.Writer.TryWrite(msg.BinaryData.Memory);
+                        }
+
+                        if (msg.IsLastChunk)
+                        {
+                            channel.Writer.TryComplete();
+                        }
+                        else
+                        {
+                            _activeStreams[msg.StreamId] = channel.Writer;
+                        }
+
+                        await _semaphore.WaitAsync(_cts.Token);
+
+                        var subscriberEvent = new SubscriberEvent(
+                            msg.Timestamp.ToDateTimeOffset(),
+                            msg.Type,
+                            new MessagePayload(new ChannelStream(channel.Reader))
+                        );
+
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                await _onEvent(subscriberEvent, _cts.Token);
+                            }
+                            catch (Exception exception)
+                            {
+                                await _onError(exception);
+                            }
+                            finally
+                            {
+                                _semaphore.Release();
+                            }
+                        });
+                    }
+                    else
+                    {
+                        await _semaphore.WaitAsync(_cts.Token);
+
+                        var payload = msg.PayloadCase is EventMessage.PayloadOneofCase.BinaryData
+                            ? new MessagePayload(msg.BinaryData.Memory)
+                            : new MessagePayload(msg.StringData);
+
+                        var subscriberEvent = new SubscriberEvent(msg.Timestamp.ToDateTimeOffset(), msg.Type, payload);
+
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                await _onEvent(subscriberEvent, _cts.Token);
+                            }
+                            catch (Exception exception)
+                            {
+                                await _onError(exception);
+                            }
+                            finally
+                            {
+                                _semaphore.Release();
+                            }
+                        });
+                    }
+                }
+            }
+            catch (Exception exception) when (exception is not (OperationCanceledException or RpcException { StatusCode: StatusCode.Cancelled, }))
+            {
+                _ready.TrySetException(exception);
+
+                foreach (var writer in _activeStreams.Values)
+                {
+                    writer.TryComplete(exception);
+                }
+
+                await _onError(exception);
+            }
+            finally
+            {
+                _ready.TrySetCanceled();
+
+                foreach (var writer in _activeStreams.Values)
+                {
+                    writer.TryComplete();
+                }
+            }
+        });
+
+        await _ready.Task;
     }
 
-    internal async Task<bool> HandleMessageAsync(string message)
+    public async ValueTask DisposeAsync()
     {
-        if (message == "ERR")
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
-            await CloseAsync();
-            await _listener.OnErrorAsync();
-            return true;
+            return;
         }
 
-        string[] fields = message.Split(':', 3);
-        if (fields.Length != 3)
+        var cancellationSource = _cts;
+        if (cancellationSource is null)
         {
-            return false;
+            return;
         }
 
-        if (!long.TryParse(fields[0], out long timestamp) || timestamp < 0)
+        cancellationSource.Cancel();
+        if (_loopTask is not null)
         {
-            return false;
+            try
+            {
+                await _loopTask;
+            }
+            catch
+            {
+            }
         }
 
-        string type = fields[1];
-        string data = fields[2];
-
-        await _listener.OnEventAsync(new SubscriberEvent(timestamp, type, data));
-        return true;
+        cancellationSource.Dispose();
+        _cts = null;
+        _semaphore?.Dispose();
     }
-
-    internal async Task ErrorAsync()
-        => await _listener.OnErrorAsync();
 }
+
+#pragma warning disable MA0048 // File name must match type name
+public readonly record struct SubscriberEvent(DateTimeOffset Timestamp, string Type, MessagePayload Data);
+#pragma warning restore MA0048 // File name must match type name

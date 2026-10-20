@@ -1,12 +1,12 @@
 ﻿using System.Collections.Immutable;
 using System.Diagnostics;
-using Solace.Common;
+using System.Text.Json;
 
 namespace Solace.StaticData;
 
 public sealed class PlayerLevels
 {
-    public readonly ImmutableArray<Level> Levels;
+    public readonly ImmutableArray<Level> Levels; // starts at level 2
 
     internal PlayerLevels(string dir)
     {
@@ -14,11 +14,11 @@ public sealed class PlayerLevels
         {
             var levels = ImmutableArray.CreateBuilder<Level>();
             string file;
-            for (int levelIndex = 2; File.Exists(file = Path.Combine(dir, $"{levelIndex}.json")); levelIndex++)
+            for (var levelIndex = 2; File.Exists(file = Path.Combine(dir, $"{levelIndex}.json")); levelIndex++)
             {
                 using (var stream = File.OpenRead(file))
                 {
-                    var level = Json.Deserialize<Level>(stream);
+                    var level = JsonSerializer.Deserialize(stream, AppJsonContext.Default.Level);
 
                     Debug.Assert(level is not null);
 
@@ -28,7 +28,7 @@ public sealed class PlayerLevels
 
             Levels = levels.DrainToImmutable();
 
-            for (int index = 1; index < Levels.Length; index++)
+            for (var index = 1; index < Levels.Length; index++)
             {
                 if (Levels[index].ExperienceRequired <= Levels[index - 1].ExperienceRequired)
                 {
@@ -49,13 +49,12 @@ public sealed class PlayerLevels
     public sealed record Level(
         int ExperienceRequired,
         int Rubies,
-        Level.Item[] Items,
+        LevelItem[] Items,
         string[] Buildplates
-    )
-    {
-        public sealed record Item(
-            string Id,
-            int Count
-        );
-    }
+    );
+
+    public sealed record LevelItem(
+        Guid Id,
+        int Count
+    );
 }
