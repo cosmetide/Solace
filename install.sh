@@ -30,8 +30,8 @@ help_text() {
     echo "  --prebuilt     Require a prebuilt bundle"
     echo ""
     echo -e "${CYN}Environment:${RST}"
-    echo "  SOLACE_REPO      GitHub repository (default: Earth-Restored/Solace)"
-    echo "  SOLACE_BRANCH    Branch to install (default: aspire)"
+    echo "  SOLACE_REPO      GitHub repository (default: cosmetide/Solace)"
+    echo "  SOLACE_BRANCH    Branch to install (default: main)"
     echo "  SOLACE_INSTALL_MODE     auto, prebuilt, or source (default: auto)"
     echo "  SOLACE_PREBUILT_URL     URL to a termux-aspire.zip bundle"
     echo "  SOLACE_PREBUILT_SHA256  Optional SHA-256 checksum for the bundle"
@@ -69,8 +69,8 @@ ok()   { echo -e "${GRN}[OK] $1${RST}"; }
 skip() { echo -e "${YLW}[SKIP] $1${RST}"; }
 err()  { echo -e "${RED}[ERROR] $1${RST}"; exit 1; }
 
-GITHUB_REPO="${SOLACE_REPO:-Earth-Restored/Solace}"
-GITHUB_BRANCH="${SOLACE_BRANCH:-aspire}"
+GITHUB_REPO="${SOLACE_REPO:-cosmetide/Solace}"
+GITHUB_BRANCH="${SOLACE_BRANCH:-main}"
 GITHUB_URL="${SOLACE_REPO_URL:-https://github.com/$GITHUB_REPO.git}"
 ASPIRE_CLI_VERSION="${ASPIRE_CLI_VERSION:-13.5.4}"
 

@@ -8,8 +8,8 @@ CYN='\033[1;36m'
 BLU='\033[1;34m'
 RST='\033[0m'
 
-GITHUB_REPO="${SOLACE_REPO:-Earth-Restored/Solace}"
-GITHUB_BRANCH="${SOLACE_BRANCH:-aspire}"
+GITHUB_REPO="${SOLACE_REPO:-cosmetide/Solace}"
+GITHUB_BRANCH="${SOLACE_BRANCH:-main}"
 REMOTE_URL="https://raw.githubusercontent.com/$GITHUB_REPO/refs/heads/$GITHUB_BRANCH/distros/Termux.sh"
 SELF_PATH="$(realpath "$0" 2>/dev/null || echo "$0")"
 TERMUX_PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"

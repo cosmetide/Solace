@@ -54,21 +54,6 @@ Replacement server for Minecraft Earth™, based on [Vienna](https://github.com/
 
 Refer to the [Installation Guide](docs/Installation.md) to get started.
 
-### Termux (Android)
-
-Solace can run without Docker on Android through Termux. From the Termux app, run:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Earth-Restored/Solace/refs/heads/aspire/install.sh | bash
-```
-
-The installer sets up PostgreSQL and proot-distro Ubuntu with .NET 11, the Aspire CLI
-and Java 21, then installs the `earth` launcher. It uses a prebuilt Aspire bundle from
-GitHub Releases when available and falls back to compiling locally. To force a local
-compile, set `SOLACE_INSTALL_MODE=source`. Run `earth` to open the TUI. See the
-[Installation Guide](docs/Installation.md#termux-android) for the first-start steps,
-LAN configuration and troubleshooting.
-
 > [!IMPORTANT]
 > **Upgrading from pre-1.0.0?**
 > Follow the [Migration Guide](docs/MigratePre1.0.0.md) to manually migrate your data.
