@@ -269,7 +269,18 @@ mkdir -p "$CONFIG_DIR"
 OLD_EULA="$(grep -E '^Shared__AcceptMinecraftEula=' "$ENV_FILE" 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d "'\"" || true)"
 OLD_PUBLIC_IP="$(grep -E '^SOLACE_PUBLIC_IP=' "$ENV_FILE" 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d "'\"" || true)"
 EULA_VALUE="${OLD_EULA:-false}"
-PUBLIC_IP_VALUE="${OLD_PUBLIC_IP:-127.0.0.1}"
+
+detect_public_ip() {
+    local ip
+    # Termux ships ifconfig; `ip` is often not installed.
+    ip="$(ifconfig wlan0 2>/dev/null | awk '/inet /{print $2; exit}')"
+    [ -n "$ip" ] || ip="$(getprop dhcp.wlan0.ipaddress 2>/dev/null | head -n1)"
+    [ -n "$ip" ] || ip="$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
+    [ -n "$ip" ] || ip="127.0.0.1"
+    printf '%s\n' "$ip"
+}
+
+PUBLIC_IP_VALUE="${OLD_PUBLIC_IP:-$(detect_public_ip)}"
 
 if [ -f "$ENV_FILE" ]; then
     cp "$ENV_FILE" "$ENV_FILE.bak"
