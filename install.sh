@@ -370,7 +370,7 @@ write_env BuildplateLauncher__ConnectorPluginJarName 'buildplate-connector-plugi
 echo "" >> "$ENV_FILE"
 
 write_env SOLACE_PUBLIC_IP "$PUBLIC_IP_VALUE"
-write_env SOLACE_DASHBOARD_PORT 18888
+write_env SOLACE_DASHBOARD_PORT 8888
 write_env SOLACE_BRANCH "$GITHUB_BRANCH"
 chmod 600 "$ENV_FILE"
 
@@ -420,7 +420,7 @@ INNER_SETUP
     echo -e "  ${CYN}Branch:${RST}  $GITHUB_BRANCH"
     echo -e "  ${CYN}Server:${RST}  ~/Solace (inside Ubuntu)"
     echo -e "  ${CYN}Portal:${RST}  http://$PUBLIC_IP_VALUE:5000"
-    echo -e "  ${CYN}Aspire:${RST}  http://$PUBLIC_IP_VALUE:18888"
+    echo -e "  ${CYN}Aspire:${RST}  http://$PUBLIC_IP_VALUE:8888"
     echo ""
     echo -e "${CYN}Next steps:${RST}"
     echo "  1. Download the resource pack and save it as:"

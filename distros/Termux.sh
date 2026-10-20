@@ -28,7 +28,7 @@ LOG_DIR="$CONFIG_DIR/logs"
 STARTUP_JSON="$LOG_DIR/startup.json"
 STARTUP_LOG="$LOG_DIR/startup.log"
 PID_FILE="$CONFIG_DIR/server.pid"
-DASHBOARD_PORT="${SOLACE_DASHBOARD_PORT:-18888}"
+DASHBOARD_PORT="${SOLACE_DASHBOARD_PORT:-8888}"
 DASHBOARD_FORWARD_PID="$CONFIG_DIR/dashboard-forward.pid"
 DASHBOARD_SOCAT_PID="$CONFIG_DIR/dashboard-socat.pid"
 ADMIN_URL="http://127.0.0.1:5000"
@@ -90,7 +90,7 @@ show_help() {
     echo ""
     echo "Platform: Termux (Android) - proot-distro + Ubuntu"
     echo "Server:   Aspire AppHost / Web Portal"
-    echo "Dashboard: http://<LAN-IP>:18888 (current login link: earth status)"
+    echo "Dashboard: http://<LAN-IP>:8888 (current login link: earth status)"
     echo ""
     exit 0
 }
@@ -265,7 +265,7 @@ load_env() {
     set +a
 
     PUBLIC_IP="${SOLACE_PUBLIC_IP:-127.0.0.1}"
-    DASHBOARD_PORT="${SOLACE_DASHBOARD_PORT:-18888}"
+    DASHBOARD_PORT="${SOLACE_DASHBOARD_PORT:-8888}"
     INSTALL_BRANCH="${SOLACE_BRANCH:-$GITHUB_BRANCH}"
     ADMIN_URL="http://$PUBLIC_IP:5000"
     if [ -f "$SETTINGS_FILE" ]; then

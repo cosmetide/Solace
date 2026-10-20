@@ -71,9 +71,9 @@ The first install can take 30-90 minutes on a phone (longer on older devices).
    in the `earth` menu to read the generated password. Change it after the first login.
 7. `earth status` also prints the **Aspire dashboard** URL. That dashboard is the
    development resource/telemetry UI (separate from the Solace admin panel). It is
-   reachable from other devices at `http://<phone-LAN-IP>:18888`; `earth status` prints
+   reachable from other devices at `http://<phone-LAN-IP>:8888`; `earth status` prints
    the current tokenized login link. The dashboard listens on a random loopback port,
-   and `earth` forwards the fixed LAN port `18888` to it across restarts. The login token
+   and `earth` forwards the fixed LAN port `8888` to it across restarts. The login token
    still changes on every start, so use the link from `earth status` rather than
    bookmarking the bare address. Anyone on the same network with the current link can
    open the dashboard. From the `earth` menu choose **Launch Aspire Panel**, or run
@@ -114,9 +114,9 @@ The individual services listen on these ports; no nginx reverse proxy is used:
 | API Server     | 8089  |
 | CDN            | 8090  |
 | Buildplates    | 19132 and up (TCP and UDP) |
-| Aspire dashboard | 18888 (LAN, token required) |
+| Aspire dashboard | 8888 (LAN, token required) |
 
-The Aspire dashboard is exposed on port 18888 so it can be opened from another device;
+The Aspire dashboard is exposed on port 8888 so it can be opened from another device;
 its login token is only valid for the current server session. Android's battery
 optimization must not kill Termux while the server is running.
 
@@ -146,7 +146,7 @@ optimization must not kill Termux while the server is running.
   services are still coming up (the first start can take 15-20 minutes on a phone).
   `STOPPED` means the AppHost exited; check the logs and start it again from the menu.
   The Aspire dashboard URL (`earth status`) shows the live resource states and works on
-  port 18888 from other devices. If port 18888 refuses connections, install `socat` in
+  port 8888 from other devices. If port 8888 refuses connections, install `socat` in
   Termux (`pkg install socat`) and restart the server; the dashboard's own random
   loopback port is not reachable from the LAN.
 * PostgreSQL runs in Termux; its log file is
