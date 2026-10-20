@@ -30,6 +30,8 @@ help_text() {
     echo -e "${CYN}Environment:${RST}"
     echo "  SOLACE_REPO      GitHub repository (default: Earth-Restored/Solace)"
     echo "  SOLACE_BRANCH    Branch to install (default: aspire)"
+    echo "  SOLACE_PREBUILT_URL     URL to a termux-aspire.zip bundle"
+    echo "  SOLACE_PREBUILT_SHA256  Optional SHA-256 checksum for the bundle"
     echo ""
     echo -e "${CYN}Platforms:${RST}"
     echo "  Termux (Android)   Uses proot-distro + Ubuntu"
@@ -163,6 +165,8 @@ if [ -n "$TERMUX_VERSION" ] || echo "$PREFIX" | grep -q "com.termux"; then
         GITHUB_BRANCH="$GITHUB_BRANCH" \
         ASPIRE_CLI_VERSION="$ASPIRE_CLI_VERSION" \
         DB_PASSWORD="$DB_PASSWORD" \
+        SOLACE_PREBUILT_URL="${SOLACE_PREBUILT_URL:-}" \
+        SOLACE_PREBUILT_SHA256="${SOLACE_PREBUILT_SHA256:-}" \
         bash -s <<'INNER_SETUP'
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
@@ -257,6 +261,39 @@ else
 fi
 git -C "$SOLACE_DIR" config --add safe.directory "$SOLACE_DIR" 2>/dev/null || true
 git -C "$SOLACE_DIR" submodule update --init --recursive
+
+rm -f "$SOLACE_DIR/.termux-prebuilt"
+if [ -n "${SOLACE_PREBUILT_URL:-}" ]; then
+    echo "  [5/7] Installing prebuilt Aspire bundle"
+    PREBUILT_ZIP="/tmp/termux-aspire.zip"
+    curl -fL --retry 3 --connect-timeout 30 "$SOLACE_PREBUILT_URL" -o "$PREBUILT_ZIP" || {
+        echo "The prebuilt bundle could not be downloaded." >&2
+        exit 1
+    }
+    if [ -n "${SOLACE_PREBUILT_SHA256:-}" ]; then
+        printf '%s  %s\n' "$SOLACE_PREBUILT_SHA256" "$PREBUILT_ZIP" | sha256sum -c - || {
+            echo "The prebuilt bundle checksum did not match." >&2
+            exit 1
+        }
+    fi
+    unzip -oq "$PREBUILT_ZIP" -d "$SOLACE_DIR"
+    rm -f "$PREBUILT_ZIP"
+    if [ -f "$SOLACE_DIR/termux-aspire.zip" ] && [ ! -f "$SOLACE_DIR/src/Solace.AppHost/bin/Debug/net11.0/Solace.AppHost" ]; then
+        unzip -oq "$SOLACE_DIR/termux-aspire.zip" -d "$SOLACE_DIR"
+        rm -f "$SOLACE_DIR/termux-aspire.zip" "$SOLACE_DIR/termux-aspire.zip.sha256"
+    fi
+    if [ -d "$SOLACE_DIR/termux-aspire" ]; then
+        cp -a "$SOLACE_DIR/termux-aspire/." "$SOLACE_DIR/"
+        rm -rf "$SOLACE_DIR/termux-aspire"
+    fi
+    APP_HOST_BIN="$SOLACE_DIR/src/Solace.AppHost/bin/Debug/net11.0/Solace.AppHost"
+    if [ ! -f "$APP_HOST_BIN" ]; then
+        echo "The prebuilt bundle is missing the AppHost binary." >&2
+        exit 1
+    fi
+    chmod +x "$APP_HOST_BIN"
+    touch "$SOLACE_DIR/.termux-prebuilt"
+fi
 
 echo "  [6/7] Writing Termux configuration"
 mkdir -p "$CONFIG_DIR"

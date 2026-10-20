@@ -138,6 +138,32 @@ does this automatically.
 8. The resource pack is required for buildplate previews and some static data. Put it at
    `staticdata/resourcepacks/vanilla.zip`.
 
+## Termux prebuilt bundle
+
+The `Termux Aspire Bundle` workflow builds the AppHost and every project it launches on
+an arm64 Linux runner, then packages the `bin/Debug/net11.0` outputs as
+`termux-aspire.zip`. It can be started from **Actions > Termux Aspire Bundle >
+Run workflow**, or by pushing a tag such as `termux-v1`. Tag builds also attach the
+bundle and its SHA-256 file to a GitHub release. Download the artifact if you do not
+publish a release.
+
+Install from a bundle URL:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Earth-Restored/Solace/refs/heads/aspire/install.sh \
+    -o install.sh
+SOLACE_PREBUILT_URL="https://example.com/termux-aspire.zip" bash install.sh
+```
+
+Set `SOLACE_PREBUILT_SHA256` to the value from `termux-aspire.zip.sha256` to verify the
+download. Actions artifact downloads wrap the bundle in another zip; extract the
+downloaded artifact first, or point `SOLACE_PREBUILT_URL` at a release asset. The
+installer still clones the source for the project files, configuration and `staticdata`;
+it only replaces the compiled outputs. Use the same branch for the source checkout and
+the bundle, setting `SOLACE_BRANCH` if needed. `earth` then starts Aspire with
+`--no-build`. Running **Update Solace** removes the bundle marker, so the next start
+rebuilds from source.
+
 ## Publishing
 
 1) Navigate to `scripts`

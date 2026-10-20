@@ -22,6 +22,11 @@ Run this from Termux:
 curl -fsSL https://raw.githubusercontent.com/Earth-Restored/Solace/refs/heads/aspire/install.sh | bash
 ```
 
+A prebuilt Termux bundle can skip the first full compile. Trigger the `Termux Aspire
+Bundle` workflow, download `termux-aspire.zip`, then run the installer with
+`SOLACE_PREBUILT_URL` set to its URL (and optionally `SOLACE_PREBUILT_SHA256`). See
+[Build.md](Build.md#termux-prebuilt-bundle) for the workflow and checksum details.
+
 The installer:
 
 1. Installs `proot-distro` and an Ubuntu rootfs.

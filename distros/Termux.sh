@@ -465,7 +465,12 @@ start_server() {
             export DOTNET_gcServer=0
             export ASPIRE_CLI_START_TIMEOUT=21600
             cd /root/Solace || exit 1
-            aspire run --detach --format json --non-interactive --apphost "$APP_HOST" -- --environment Termux >"$STARTUP_JSON"
+            ASPIRE_BUILD_ARGS=""
+            if [ -f /root/Solace/.termux-prebuilt ]; then
+                ASPIRE_BUILD_ARGS="--no-build"
+                echo "[Solace] Using prebuilt Aspire bundle."
+            fi
+            aspire run --detach --format json --non-interactive $ASPIRE_BUILD_ARGS --apphost "$APP_HOST" -- --environment Termux >"$STARTUP_JSON"
             rc=$?
             [ "$rc" -eq 0 ] || exit "$rc"
             pid="$(sed -n "s/.*\"appHostPid\": *\([0-9][0-9]*\).*/\1/p" "$STARTUP_JSON" | tail -n1)"
@@ -768,6 +773,7 @@ git fetch --prune origin "$BRANCH"
 git checkout "$BRANCH"
 git pull --ff-only origin "$BRANCH"
 git submodule update --init --recursive
+rm -f /root/Solace/.termux-prebuilt
 INNER
     then
         echo -e "${RED}Update failed. You may have local changes in $UBUNTU_SOLACE_DIR.${RST}"
