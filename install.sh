@@ -445,12 +445,30 @@ INNER_SETUP
     print_step "6. CREATING EARTH COMMAND"
     mkdir -p "$PREFIX/bin"
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd || true)"
+    EARTH_SOURCE=""
+
     if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/distros/Termux.sh" ]; then
-        cp "$SCRIPT_DIR/distros/Termux.sh" "$PREFIX/bin/earth"
-    else
-        curl -fsSL "https://raw.githubusercontent.com/$GITHUB_REPO/refs/heads/$GITHUB_BRANCH/distros/Termux.sh" -o "$PREFIX/bin/earth" \
-            || err "Failed to download the earth launcher"
+        EARTH_SOURCE="$SCRIPT_DIR/distros/Termux.sh"
+    elif [ -f "$PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs/root/Solace/distros/Termux.sh" ]; then
+        EARTH_SOURCE="$PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs/root/Solace/distros/Termux.sh"
     fi
+
+    if [ -n "$EARTH_SOURCE" ]; then
+        cp "$EARTH_SOURCE" "$PREFIX/bin/earth"
+    else
+        for url in \
+            "https://raw.githubusercontent.com/$GITHUB_REPO/refs/heads/$GITHUB_BRANCH/distros/Termux.sh" \
+            "https://cdn.jsdelivr.net/gh/$GITHUB_REPO@$GITHUB_BRANCH/distros/Termux.sh" \
+            "https://github.com/$GITHUB_REPO/raw/refs/heads/$GITHUB_BRANCH/distros/Termux.sh"; do
+            if curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 30 "$url" -o "$PREFIX/bin/earth"; then
+                EARTH_SOURCE="download"
+                break
+            fi
+            rm -f "$PREFIX/bin/earth"
+        done
+        [ -n "$EARTH_SOURCE" ] || err "Failed to download the earth launcher; check the network and re-run install.sh"
+    fi
+
     chmod +x "$PREFIX/bin/earth"
     ok "earth command installed"
 
