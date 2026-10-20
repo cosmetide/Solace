@@ -144,14 +144,21 @@ The `Termux Aspire Bundle` workflow builds the AppHost and every project it laun
 an arm64 Linux runner, then packages the `bin/Debug/net11.0` outputs as
 `termux-aspire.zip`. It can be started from **Actions > Termux Aspire Bundle >
 Run workflow**, or by pushing a tag such as `termux-v1`. Tag builds also attach the
-bundle and its SHA-256 file to a GitHub release. Download the artifact if you do not
-publish a release.
+bundle and its SHA-256 file to a GitHub release.
 
-Install from a bundle URL:
+The installer uses `releases/latest/download/termux-aspire.zip` automatically when it is
+available, which is recommended over compiling on the phone. Force a local build with
+`--source` or `SOLACE_INSTALL_MODE=source`; require a release bundle with `--prebuilt`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Earth-Restored/Solace/refs/heads/aspire/install.sh \
     -o install.sh
+bash install.sh --source
+```
+
+Install from a specific bundle URL:
+
+```bash
 SOLACE_PREBUILT_URL="https://example.com/termux-aspire.zip" bash install.sh
 ```
 

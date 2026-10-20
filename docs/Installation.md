@@ -22,9 +22,13 @@ Run this from Termux:
 curl -fsSL https://raw.githubusercontent.com/Earth-Restored/Solace/refs/heads/aspire/install.sh | bash
 ```
 
-A prebuilt Termux bundle can skip the first full compile. Trigger the `Termux Aspire
-Bundle` workflow, download `termux-aspire.zip`, then run the installer with
-`SOLACE_PREBUILT_URL` set to its URL (and optionally `SOLACE_PREBUILT_SHA256`). See
+A prebuilt Termux bundle is used automatically when a matching GitHub release is
+available. This is recommended because it avoids compiling the whole solution on the
+phone. To force a local compile instead, use `--source` or
+`SOLACE_INSTALL_MODE=source`. To require a prebuilt bundle, use `--prebuilt`.
+
+For a specific bundle, set `SOLACE_PREBUILT_URL` to the `termux-aspire.zip` URL (and
+optionally `SOLACE_PREBUILT_SHA256`). See
 [Build.md](Build.md#termux-prebuilt-bundle) for the workflow and checksum details.
 
 The installer:
@@ -58,12 +62,13 @@ The first install can take 30-90 minutes on a phone (longer on older devices).
    ```
 
 3. Select **Start/Stop Server** and accept the Minecraft EULA when prompted.
-4. Wait for the first build to finish. The first start compiles the whole solution and
-   starts every service; on a phone this can take 15-20 minutes. The admin panel stays
-   unreachable until the web portal has started. Subsequent starts are much faster.
-   If `earth status` reports **STOPPED** during the first attempt, start it again from the
-   `earth` menu. The build and Aspire DCP caches are warm by then, so the second attempt
-   normally gets further and succeeds.
+4. Wait for the first start to finish. A prebuilt install starts every service without
+   compiling; a source install compiles the whole solution first, which can take
+   15-20 minutes on a phone. The admin panel stays unreachable until the web portal has
+   started. Subsequent starts are much faster. If `earth status` reports **STOPPED**
+   during a source first attempt, start it again from the `earth` menu. The build and
+   Aspire DCP caches are warm by then, so the second attempt normally gets further and
+   succeeds.
 5. Open the admin panel at the URL printed by `earth status` (for example
    <http://192.168.1.50:5000>). On the phone itself <http://127.0.0.1:5000> also works.
    From the `earth` menu choose **Launch Web Portal**, or run `earth portal`.

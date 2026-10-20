@@ -26,10 +26,13 @@ help_text() {
     echo ""
     echo -e "${CYN}Options:${RST}"
     echo "  -h, --help     Show this help message"
+    echo "  --source       Build from source on this device"
+    echo "  --prebuilt     Require a prebuilt bundle"
     echo ""
     echo -e "${CYN}Environment:${RST}"
     echo "  SOLACE_REPO      GitHub repository (default: Earth-Restored/Solace)"
     echo "  SOLACE_BRANCH    Branch to install (default: aspire)"
+    echo "  SOLACE_INSTALL_MODE     auto, prebuilt, or source (default: auto)"
     echo "  SOLACE_PREBUILT_URL     URL to a termux-aspire.zip bundle"
     echo "  SOLACE_PREBUILT_SHA256  Optional SHA-256 checksum for the bundle"
     echo ""
@@ -41,9 +44,13 @@ help_text() {
     exit 0
 }
 
+INSTALL_MODE="${SOLACE_INSTALL_MODE:-auto}"
+
 for arg in "$@"; do
     case "$arg" in
         -h|--help) help_text ;;
+        --source) INSTALL_MODE=source ;;
+        --prebuilt) INSTALL_MODE=prebuilt ;;
     esac
 done
 
@@ -66,6 +73,22 @@ GITHUB_REPO="${SOLACE_REPO:-Earth-Restored/Solace}"
 GITHUB_BRANCH="${SOLACE_BRANCH:-aspire}"
 GITHUB_URL="${SOLACE_REPO_URL:-https://github.com/$GITHUB_REPO.git}"
 ASPIRE_CLI_VERSION="${ASPIRE_CLI_VERSION:-13.5.4}"
+
+case "$INSTALL_MODE" in
+    auto|prebuilt|source) ;;
+    *) err "SOLACE_INSTALL_MODE must be auto, prebuilt, or source" ;;
+esac
+
+if [ "$INSTALL_MODE" = source ]; then
+    PREBUILT_URL=""
+    PREBUILT_URL_IS_DEFAULT=0
+elif [ -n "${SOLACE_PREBUILT_URL:-}" ]; then
+    PREBUILT_URL="$SOLACE_PREBUILT_URL"
+    PREBUILT_URL_IS_DEFAULT=0
+else
+    PREBUILT_URL="https://github.com/$GITHUB_REPO/releases/latest/download/termux-aspire.zip"
+    PREBUILT_URL_IS_DEFAULT=1
+fi
 
 clear && banner
 
@@ -156,8 +179,14 @@ if [ -n "$TERMUX_VERSION" ] || echo "$PREFIX" | grep -q "com.termux"; then
     ok "PostgreSQL configured"
 
     print_step "5. CONFIGURING UBUNTU"
-    echo -e "  ${CYN}This step installs .NET 11, Java 21 and the"
-    echo -e "  Solace source. It can take 30-90 minutes on a phone.${RST}"
+    if [ -n "$PREBUILT_URL" ]; then
+        echo -e "  ${CYN}This step installs .NET 11, Java 21 and a prebuilt"
+        echo -e "  Solace bundle. The prebuilt bundle is recommended because"
+        echo -e "  it avoids a full compile on the phone.${RST}"
+    else
+        echo -e "  ${CYN}This step installs .NET 11 and Java 21, then builds"
+        echo -e "  Solace from source. This can take 30-90 minutes on a phone.${RST}"
+    fi
 
     if ! proot-distro login ubuntu -- env \
         GITHUB_REPO="$GITHUB_REPO" \
@@ -165,7 +194,9 @@ if [ -n "$TERMUX_VERSION" ] || echo "$PREFIX" | grep -q "com.termux"; then
         GITHUB_BRANCH="$GITHUB_BRANCH" \
         ASPIRE_CLI_VERSION="$ASPIRE_CLI_VERSION" \
         DB_PASSWORD="$DB_PASSWORD" \
-        SOLACE_PREBUILT_URL="${SOLACE_PREBUILT_URL:-}" \
+        SOLACE_INSTALL_MODE="$INSTALL_MODE" \
+        SOLACE_PREBUILT_URL="$PREBUILT_URL" \
+        SOLACE_PREBUILT_URL_IS_DEFAULT="$PREBUILT_URL_IS_DEFAULT" \
         SOLACE_PREBUILT_SHA256="${SOLACE_PREBUILT_SHA256:-}" \
         bash -s <<'INNER_SETUP'
 set -euo pipefail
@@ -263,36 +294,43 @@ git -C "$SOLACE_DIR" config --add safe.directory "$SOLACE_DIR" 2>/dev/null || tr
 git -C "$SOLACE_DIR" submodule update --init --recursive
 
 rm -f "$SOLACE_DIR/.termux-prebuilt"
-if [ -n "${SOLACE_PREBUILT_URL:-}" ]; then
-    echo "  [5/7] Installing prebuilt Aspire bundle"
+if [ "$SOLACE_INSTALL_MODE" != "source" ] && [ -n "${SOLACE_PREBUILT_URL:-}" ]; then
+    echo "  [5/7] Checking prebuilt Aspire bundle"
     PREBUILT_ZIP="/tmp/termux-aspire.zip"
-    curl -fL --retry 3 --connect-timeout 30 "$SOLACE_PREBUILT_URL" -o "$PREBUILT_ZIP" || {
-        echo "The prebuilt bundle could not be downloaded." >&2
-        exit 1
-    }
-    if [ -n "${SOLACE_PREBUILT_SHA256:-}" ]; then
-        printf '%s  %s\n' "$SOLACE_PREBUILT_SHA256" "$PREBUILT_ZIP" | sha256sum -c - || {
-            echo "The prebuilt bundle checksum did not match." >&2
+    if curl -fL --retry 3 --connect-timeout 30 "$SOLACE_PREBUILT_URL" -o "$PREBUILT_ZIP"; then
+        if [ -n "${SOLACE_PREBUILT_SHA256:-}" ]; then
+            printf '%s  %s\n' "$SOLACE_PREBUILT_SHA256" "$PREBUILT_ZIP" | sha256sum -c - || {
+                rm -f "$PREBUILT_ZIP"
+                echo "The prebuilt bundle checksum did not match." >&2
+                exit 1
+            }
+        fi
+        unzip -oq "$PREBUILT_ZIP" -d "$SOLACE_DIR"
+        rm -f "$PREBUILT_ZIP"
+        if [ -f "$SOLACE_DIR/termux-aspire.zip" ] && [ ! -f "$SOLACE_DIR/src/Solace.AppHost/bin/Debug/net11.0/Solace.AppHost" ]; then
+            unzip -oq "$SOLACE_DIR/termux-aspire.zip" -d "$SOLACE_DIR"
+            rm -f "$SOLACE_DIR/termux-aspire.zip" "$SOLACE_DIR/termux-aspire.zip.sha256"
+        fi
+        if [ -d "$SOLACE_DIR/termux-aspire" ]; then
+            cp -a "$SOLACE_DIR/termux-aspire/." "$SOLACE_DIR/"
+            rm -rf "$SOLACE_DIR/termux-aspire"
+        fi
+        APP_HOST_BIN="$SOLACE_DIR/src/Solace.AppHost/bin/Debug/net11.0/Solace.AppHost"
+        if [ ! -f "$APP_HOST_BIN" ]; then
+            echo "The prebuilt bundle is missing the AppHost binary." >&2
             exit 1
-        }
+        fi
+        chmod +x "$APP_HOST_BIN"
+        touch "$SOLACE_DIR/.termux-prebuilt"
+        echo "  [5/7] Installed prebuilt Aspire bundle"
+    else
+        rm -f "$PREBUILT_ZIP"
+        if [ "$SOLACE_INSTALL_MODE" = "prebuilt" ] || [ "${SOLACE_PREBUILT_URL_IS_DEFAULT:-0}" != "1" ]; then
+            echo "The prebuilt bundle could not be downloaded." >&2
+            exit 1
+        fi
+        echo "  [5/7] No prebuilt release found; building from source"
     fi
-    unzip -oq "$PREBUILT_ZIP" -d "$SOLACE_DIR"
-    rm -f "$PREBUILT_ZIP"
-    if [ -f "$SOLACE_DIR/termux-aspire.zip" ] && [ ! -f "$SOLACE_DIR/src/Solace.AppHost/bin/Debug/net11.0/Solace.AppHost" ]; then
-        unzip -oq "$SOLACE_DIR/termux-aspire.zip" -d "$SOLACE_DIR"
-        rm -f "$SOLACE_DIR/termux-aspire.zip" "$SOLACE_DIR/termux-aspire.zip.sha256"
-    fi
-    if [ -d "$SOLACE_DIR/termux-aspire" ]; then
-        cp -a "$SOLACE_DIR/termux-aspire/." "$SOLACE_DIR/"
-        rm -rf "$SOLACE_DIR/termux-aspire"
-    fi
-    APP_HOST_BIN="$SOLACE_DIR/src/Solace.AppHost/bin/Debug/net11.0/Solace.AppHost"
-    if [ ! -f "$APP_HOST_BIN" ]; then
-        echo "The prebuilt bundle is missing the AppHost binary." >&2
-        exit 1
-    fi
-    chmod +x "$APP_HOST_BIN"
-    touch "$SOLACE_DIR/.termux-prebuilt"
 fi
 
 echo "  [6/7] Writing Termux configuration"
@@ -375,9 +413,15 @@ write_env SOLACE_REPO "$GITHUB_REPO"
 write_env SOLACE_BRANCH "$GITHUB_BRANCH"
 chmod 600 "$ENV_FILE"
 
+if [ -f "$SOLACE_DIR/.termux-prebuilt" ]; then
+    INSTALL_MODE_USED="prebuilt"
+else
+    INSTALL_MODE_USED="source"
+fi
+
 cat > "$SETTINGS_FILE" <<EOF
 {
-  "installMode": "source",
+  "installMode": "$INSTALL_MODE_USED",
   "branch": "$GITHUB_BRANCH",
   "version": "$(git -C "$SOLACE_DIR" rev-parse --short HEAD)",
   "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -415,9 +459,14 @@ INNER_SETUP
     echo -e "${ORG}           INSTALL COMPLETE             ${RST}"
     echo -e "${GRN}========================================${RST}"
     echo ""
+    if [ -f "$PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs/root/Solace/.termux-prebuilt" ]; then
+        INSTALLED_MODE="prebuilt"
+    else
+        INSTALLED_MODE="source"
+    fi
     echo -e "  ${CYN}OS:${RST}      Termux (proot-distro ubuntu)"
     echo -e "  ${CYN}Arch:${RST}    $(uname -m)"
-    echo -e "  ${CYN}Mode:${RST}    source"
+    echo -e "  ${CYN}Mode:${RST}    $INSTALLED_MODE"
     echo -e "  ${CYN}Branch:${RST}  $GITHUB_BRANCH"
     echo -e "  ${CYN}Server:${RST}  ~/Solace (inside Ubuntu)"
     echo -e "  ${CYN}Portal:${RST}  http://$PUBLIC_IP_VALUE:5000"

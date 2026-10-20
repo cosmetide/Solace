@@ -63,7 +63,9 @@ curl -fsSL https://raw.githubusercontent.com/Earth-Restored/Solace/refs/heads/as
 ```
 
 The installer sets up PostgreSQL and proot-distro Ubuntu with .NET 11, the Aspire CLI
-and Java 21, then installs the `earth` launcher. Run `earth` to open the TUI. See the
+and Java 21, then installs the `earth` launcher. It uses a prebuilt Aspire bundle from
+GitHub Releases when available and falls back to compiling locally. To force a local
+compile, set `SOLACE_INSTALL_MODE=source`. Run `earth` to open the TUI. See the
 [Installation Guide](docs/Installation.md#termux-android) for the first-start steps,
 LAN configuration and troubleshooting.
 
