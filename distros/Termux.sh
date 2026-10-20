@@ -188,7 +188,9 @@ is_process_alive() {
     fi
     pid="$(get_apphost_pid)"
     [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
-    pgrep -f "Solace\.AppHost" >/dev/null 2>&1
+    # Match the executable name exactly; a -f match would also match shell commands
+    # that merely mention the AppHost (for example, a grep for its logs).
+    pgrep -x "Solace.AppHost" >/dev/null 2>&1
 }
 
 is_running() {
