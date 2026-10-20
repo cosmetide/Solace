@@ -149,8 +149,21 @@ get_cli_pid() {
 }
 
 get_dashboard_url() {
-    [ -f "$STARTUP_JSON" ] || return
-    sed -n 's/.*"dashboardUrl": *"\([^"]*\)".*/\1/p' "$STARTUP_JSON" | tail -n1 | sed 's/\\u0026/\&/g; s/\\//g'
+    local url="" log
+    if [ -f "$STARTUP_JSON" ]; then
+        url="$(sed -n 's/.*"dashboardUrl": *"\([^"]*\)".*/\1/p' "$STARTUP_JSON" | tail -n1 | sed 's/\\u0026/\&/g; s/\\//g')"
+    fi
+
+    # The CLI keeps the detached startup JSON buffered, so on a running server it can
+    # still be empty. Fall back to the AppHost log, which always prints the login URL.
+    if [ -z "$url" ]; then
+        log="$(ls -t "$UBUNTU_HOME"/.aspire/logs/cli_*detach-child*.log 2>/dev/null | head -n1)"
+        if [ -n "$log" ] && [ -f "$log" ]; then
+            url="$(grep -a -o 'http://localhost:[0-9][0-9]*/login?t=[a-f0-9]*' "$log" 2>/dev/null | tail -n1)"
+        fi
+    fi
+
+    [ -n "$url" ] && printf '%s\n' "$url"
 }
 
 get_cli_log() {
@@ -526,18 +539,31 @@ read_password_from_log() {
     local log="$1"
     [ -n "$log" ] && [ -f "$log" ] || return 1
     grep -a -A6 "SETUP: Initial owner account created" "$log" 2>/dev/null \
+        | sed 's/\x1b\[[0-9;]*m//g' \
+        | tr -d '\r' \
         | sed -n 's/.*Password: *//p' \
         | tail -n1
 }
 
 get_admin_password() {
-    local log password
+    local log password f
     local paths=""
 
     log="$(get_cli_log)"
     [ -n "$log" ] && paths="$(host_path "$log")"
     for log in $paths "$STARTUP_LOG"; do
         password="$(read_password_from_log "$log")"
+        if [ -n "$password" ]; then
+            printf '%s\n' "$password"
+            return 0
+        fi
+    done
+
+    # DCP stores each resource's stdout in /tmp/aspire-dcp*/<id>_out. The initial
+    # password is only printed once (when the database is first created), so this is
+    # the most reliable place to recover it from.
+    for f in $(ls -t "$PROOT_ROOTFS"/tmp/aspire-dcp*/*_out 2>/dev/null); do
+        password="$(read_password_from_log "$f")"
         if [ -n "$password" ]; then
             printf '%s\n' "$password"
             return 0
