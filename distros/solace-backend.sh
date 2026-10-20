@@ -147,6 +147,26 @@ get_cli_log() {
     sed -n 's/.*"logFile": *"\([^"]*\)".*/\1/p' "$STARTUP_JSON" | tail -n1 | sed 's/\\//g'
 }
 
+find_service_log() {
+    local service="$1" d f guid
+    case "$service" in
+        ""|*[!A-Za-z0-9_-]*) return 1 ;;
+    esac
+    for d in $(ls -td "$PROOT_ROOTFS"/tmp/aspire-dcp* 2>/dev/null); do
+        for f in "$d"/resource-executable-*.log; do
+            [ -f "$f" ] || continue
+            grep -q "\"Executable\": \"/${service}-" "$f" 2>/dev/null || continue
+            guid="${f##*/resource-executable-}"
+            guid="${guid%.log}"
+            if [ -f "$d/${guid}_out" ]; then
+                printf '%s\n' "$d/${guid}_out"
+                return 0
+            fi
+        done
+    done
+    return 1
+}
+
 host_path() {
     case "$1" in
         /root/*) printf '%s%s\n' "$UBUNTU_HOME" "${1#/root}" ;;
@@ -477,6 +497,8 @@ get_admin_password() {
 
     log="$(get_cli_log)"
     [ -n "$log" ] && paths="$(host_path "$log")"
+    log="$(find_service_log web-portal 2>/dev/null || true)"
+    [ -n "$log" ] && paths="$paths $log"
     for log in $paths "$STARTUP_LOG"; do
         password="$(read_password_from_log "$log")"
         if [ -n "$password" ]; then
@@ -708,6 +730,11 @@ case "${1:-}" in
             ''|*[!0-9]*) lines=200 ;;
         esac
         if [ -n "$service" ] && [ "$service" != "startup" ]; then
+            log_file="$(find_service_log "$service" 2>/dev/null || true)"
+            if [ -n "$log_file" ]; then
+                tail -n "$lines" "$log_file"
+                exit 0
+            fi
             ubuntu_dotnet timeout 60 aspire logs "$service" --apphost "$UBUNTU_APP_HOST" --tail "$lines"
             exit 0
         fi
