@@ -188,9 +188,11 @@ is_process_alive() {
     fi
     pid="$(get_apphost_pid)"
     [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
-    # Match the executable name exactly; a -f match would also match shell commands
-    # that merely mention the AppHost (for example, a grep for its logs).
-    pgrep -x "Solace.AppHost" >/dev/null 2>&1
+    # Match the built executable path, not the CLI command line (which contains the
+    # project path and used to make a dead server look alive). The bracket keeps a
+    # diagnostic shell command from matching itself.
+    pgrep -x "Solace.AppHost" >/dev/null 2>&1 ||
+        pgrep -f '[b]in/Debug/net11.0/Solace.AppHost' >/dev/null 2>&1
 }
 
 is_running() {
