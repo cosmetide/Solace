@@ -595,13 +595,39 @@ if (termuxMode)
     locator.WithExternalHttpEndpoints();
 
     // DCP proxies listen on loopback only. Bind the public HTTP services directly to
-    // their fixed ports (TargetHost is "*" for all five) so phones and PCs on the same
-    // Wi-Fi can connect without a port forwarder inside Android.
-    apiServer.WithEndpoint("http", endpoint => endpoint.IsProxied = false);
-    cdn.WithEndpoint("http", endpoint => endpoint.IsProxied = false);
-    authServer.WithEndpoint("http", endpoint => endpoint.IsProxied = false);
-    webPortal.WithEndpoint("http", endpoint => endpoint.IsProxied = false);
-    locator.WithEndpoint("http", endpoint => endpoint.IsProxied = false);
+    // their fixed ports and all interfaces so other devices on the Wi-Fi can connect.
+    // Proxyless endpoints require a target port; ASP.NET Core derives its listener from
+    // the target host.
+    apiServer.WithEndpoint("http", endpoint =>
+    {
+        endpoint.IsProxied = false;
+        endpoint.TargetHost = "0.0.0.0";
+        endpoint.TargetPort = apiPort;
+    });
+    cdn.WithEndpoint("http", endpoint =>
+    {
+        endpoint.IsProxied = false;
+        endpoint.TargetHost = "0.0.0.0";
+        endpoint.TargetPort = cdnPort;
+    });
+    authServer.WithEndpoint("http", endpoint =>
+    {
+        endpoint.IsProxied = false;
+        endpoint.TargetHost = "0.0.0.0";
+        endpoint.TargetPort = authServerPort;
+    });
+    webPortal.WithEndpoint("http", endpoint =>
+    {
+        endpoint.IsProxied = false;
+        endpoint.TargetHost = "0.0.0.0";
+        endpoint.TargetPort = webPortalPort;
+    });
+    locator.WithEndpoint("http", endpoint =>
+    {
+        endpoint.IsProxied = false;
+        endpoint.TargetHost = "0.0.0.0";
+        endpoint.TargetPort = locatorPort;
+    });
 }
 
 // The AppHost runs in the Termux environment, but the services must keep using the
