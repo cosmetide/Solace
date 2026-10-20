@@ -597,11 +597,11 @@ if (termuxMode)
     // DCP proxies listen on loopback only. Bind the public HTTP services directly to
     // their fixed ports (TargetHost is "*" for all five) so phones and PCs on the same
     // Wi-Fi can connect without a port forwarder inside Android.
-    apiServer.GetEndpoint("http").IsProxied = false;
-    cdn.GetEndpoint("http").IsProxied = false;
-    authServer.GetEndpoint("http").IsProxied = false;
-    webPortal.GetEndpoint("http").IsProxied = false;
-    locator.GetEndpoint("http").IsProxied = false;
+    apiServer.WithEndpoint("http", endpoint => endpoint.IsProxied = false);
+    cdn.WithEndpoint("http", endpoint => endpoint.IsProxied = false);
+    authServer.WithEndpoint("http", endpoint => endpoint.IsProxied = false);
+    webPortal.WithEndpoint("http", endpoint => endpoint.IsProxied = false);
+    locator.WithEndpoint("http", endpoint => endpoint.IsProxied = false);
 }
 
 // The AppHost runs in the Termux environment, but the services must keep using the
