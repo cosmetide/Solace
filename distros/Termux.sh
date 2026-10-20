@@ -23,6 +23,13 @@ UBUNTU_HOME="$PROOT_ROOTFS/root"
 SOLACE_DIR="$UBUNTU_HOME/Solace"
 CONFIG_DIR="$UBUNTU_HOME/.config/solace"
 ENV_FILE="$CONFIG_DIR/termux.env"
+if [ -f "$ENV_FILE" ]; then
+    ENV_REPO="$(sed -n 's/^SOLACE_REPO=//p' "$ENV_FILE" | tail -n1 | tr -d "'\"")"
+    ENV_BRANCH="$(sed -n 's/^SOLACE_BRANCH=//p' "$ENV_FILE" | tail -n1 | tr -d "'\"")"
+    [ -z "${SOLACE_REPO:-}" ] && [ -n "$ENV_REPO" ] && GITHUB_REPO="$ENV_REPO"
+    [ -z "${SOLACE_BRANCH:-}" ] && [ -n "$ENV_BRANCH" ] && GITHUB_BRANCH="$ENV_BRANCH"
+    REMOTE_URL="https://raw.githubusercontent.com/$GITHUB_REPO/refs/heads/$GITHUB_BRANCH/distros/Termux.sh"
+fi
 SETTINGS_FILE="$CONFIG_DIR/termux-settings.json"
 LOG_DIR="$CONFIG_DIR/logs"
 STARTUP_JSON="$LOG_DIR/startup.json"
