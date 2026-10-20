@@ -78,6 +78,7 @@ if [ -n "$TERMUX_VERSION" ] || echo "$PREFIX" | grep -q "com.termux"; then
     command -v fzf >/dev/null 2>&1 || pkg install -y fzf || err "Failed to install fzf"
     command -v pgrep >/dev/null 2>&1 || pkg install -y procps || err "Failed to install procps"
     command -v curl >/dev/null 2>&1 || pkg install -y curl || err "Failed to install curl"
+    command -v ifconfig >/dev/null 2>&1 || pkg install -y net-tools || true
     command -v initdb >/dev/null 2>&1 || pkg install -y postgresql || err "Failed to install postgresql"
     hash -r
     ok "Termux packages installed"
