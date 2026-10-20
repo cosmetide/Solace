@@ -5,27 +5,14 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Solace.AppHost;
 
-/// <summary>
-/// Termux (proot-distro) workarounds for Aspire's DCP orchestrator.
-/// </summary>
 internal static class TermuxDcp
 {
-    // Aspire waits a fixed 20 seconds for the DCP apiserver to publish its kubeconfig
-    // (KubernetesService.MaxRetryDuration). The bundled dcp binary is an ~80 MB Go
-    // executable and a cold start from phone storage took ~16 seconds in testing,
-    // before the package search and JIT work that run during the same startup window.
     private static readonly TimeSpan KubernetesStartupTimeout = TimeSpan.FromMinutes(5);
 
-    // Running DCP once faults the binary into the page cache, so the instance the
-    // AppHost actually uses starts almost instantly afterwards.
     private static readonly TimeSpan PrewarmTimeout = TimeSpan.FromMinutes(2);
 
     public static void Prepare(IServiceCollection services)
     {
-        // DCP resolves "localhost" for service proxies. Android/proot services commonly
-        // bind only 127.0.0.1, while Go resolves localhost to ::1 first. Without this,
-        // DCP proxies and health checks fail with "dial tcp [::1]:<port>: connection
-        // refused" and dependent resources (web-portal) wait forever.
         Environment.SetEnvironmentVariable("DCP_IP_VERSION_PREFERENCE", "ipv4");
 
         ExtendKubernetesStartupTimeout(services, KubernetesStartupTimeout);
@@ -88,8 +75,6 @@ internal static class TermuxDcp
             return descriptor.ImplementationFactory(provider);
         }
 
-        // KubernetesService is internal and uses a primary constructor, so resolve its
-        // dependencies by hand instead of relying on ActivatorUtilities' public-only scan.
         var constructor = implementationType
             .GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
             .OrderByDescending(c => c.GetParameters().Length)

@@ -67,9 +67,6 @@ ASPIRE_CLI_VERSION="${ASPIRE_CLI_VERSION:-13.5.4}"
 
 clear && banner
 
-# ─────────────────────────────────────────
-#  TERMUX BRANCH
-# ─────────────────────────────────────────
 if [ -n "$TERMUX_VERSION" ] || echo "$PREFIX" | grep -q "com.termux"; then
     export DEBIAN_FRONTEND=noninteractive
     dpkg --configure -a >/dev/null 2>&1 || true
@@ -112,7 +109,6 @@ if [ -n "$TERMUX_VERSION" ] || echo "$PREFIX" | grep -q "com.termux"; then
     echo -e "  create or run database clusters.${RST}"
     TERMUX_PGDATA="$PREFIX/var/lib/postgresql"
 
-    # Preserve the database password across reinstall/update runs.
     TERMUX_ENV_FILE="$HOME/.config/solace/termux.env"
     OLD_DB_PASSWORD="$(grep -E '^SOLACE_DB_PASSWORD=' "$TERMUX_ENV_FILE" 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d "'\"")"
     DB_PASSWORD="${OLD_DB_PASSWORD:-$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n' | cut -c1-32)}"
@@ -127,7 +123,6 @@ if [ -n "$TERMUX_VERSION" ] || echo "$PREFIX" | grep -q "com.termux"; then
             --auth-local=trust --auth-host=scram-sha-256 --pwfile="$PWFILE" >/dev/null \
             || { rm -f "$PWFILE"; err "PostgreSQL initdb failed"; }
         rm -f "$PWFILE"
-        # PostgreSQL needs a valid socket directory; use Termux's tmp.
         printf '\nunix_socket_directories = %s\n' "'$PREFIX/tmp'" >> "$TERMUX_PGDATA/postgresql.conf"
         touch "$TERMUX_PGDATA/.solace-managed"
         ok "PostgreSQL cluster created"
@@ -244,8 +239,6 @@ export DOTNET_NOLOGO=1
 export DOTNET_gcServer=0
 BASHRC
 fi
-# Older installers set DOTNET_GCHeapHardLimit, but with DATAS a hard limit makes the
-# runtime reserve a ~329 GiB regions range, which fails under proot-distro.
 sed -i '/DOTNET_GCHeapHardLimit/d' "$HOME/.bashrc" 2>/dev/null || true
 
 echo "  [5/7] Fetching Solace ($GITHUB_BRANCH)"
@@ -268,14 +261,12 @@ git -C "$SOLACE_DIR" submodule update --init --recursive
 echo "  [6/7] Writing Termux configuration"
 mkdir -p "$CONFIG_DIR"
 
-# Preserve the EULA decision and public endpoint across reinstall/update runs.
 OLD_EULA="$(grep -E '^Shared__AcceptMinecraftEula=' "$ENV_FILE" 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d "'\"" || true)"
 OLD_PUBLIC_IP="$(grep -E '^SOLACE_PUBLIC_IP=' "$ENV_FILE" 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d "'\"" || true)"
 EULA_VALUE="${OLD_EULA:-false}"
 
 detect_public_ip() {
     local ip
-    # Termux ships ifconfig; `ip` is often not installed.
     ip="$(ifconfig wlan0 2>/dev/null | awk '/inet /{print $2; exit}')"
     [ -n "$ip" ] || ip="$(getprop dhcp.wlan0.ipaddress 2>/dev/null | head -n1)"
     [ -n "$ip" ] || ip="$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
@@ -291,21 +282,15 @@ fi
 
 OIDC_SECRET="$(openssl rand -hex 24)"
 
-# %q keeps values such as connection strings (which contain semicolons) parseable by
-# bash when the TUI sources this file.
 write_env() {
     printf '%s=%q\n' "$1" "$2" >> "$ENV_FILE"
 }
 
 cat > "$ENV_FILE" <<'EOF'
-# Solace Termux runtime configuration.
-# Values here override src/Solace.AppHost/appsettings.Termux.json.
 EOF
 write_env ASPNETCORE_ENVIRONMENT Termux
 write_env DOTNET_ENVIRONMENT Termux
 write_env Termux__Enabled true
-# The AppHost replaces the HTTPS launch-profile endpoints with HTTP ones so the
-# dashboard works without a developer certificate inside proot-distro.
 write_env ASPIRE_ALLOW_UNSECURED_TRANSPORT true
 echo "" >> "$ENV_FILE"
 
@@ -418,9 +403,6 @@ INNER_SETUP
     exit 0
 fi
 
-# ─────────────────────────────────────────
-#  NON-TERMUX
-# ─────────────────────────────────────────
 echo -e "${YLW}This installer currently supports Termux (Android) only.${RST}"
 echo ""
 echo "For Linux, macOS and Windows, use the Docker-based setup:"

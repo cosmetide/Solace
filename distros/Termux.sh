@@ -1,11 +1,4 @@
 #!/data/data/com.termux/files/usr/bin/bash
-#
-# Solace Termux launcher (TUI + CLI).
-#
-# This script runs in Termux, outside proot-distro. The Solace server itself runs inside
-# the Ubuntu proot-distro container and is started as its own background proot session, so
-# it keeps running when the TUI exits. proot's --kill-on-exit only reaps the processes of
-# the session that launched them, so the server must never be started from the TUI session.
 
 RED='\033[1;31m'
 GRN='\033[1;32m'
@@ -25,7 +18,6 @@ case "$SELF_PATH" in
     "$TERMUX_PREFIX/bin/"*) LAUNCHER_PATH="$SELF_PATH" ;;
 esac
 
-# Paths inside the proot-distro Ubuntu container.
 PROOT_ROOTFS="$TERMUX_PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs"
 UBUNTU_HOME="$PROOT_ROOTFS/root"
 SOLACE_DIR="$UBUNTU_HOME/Solace"
@@ -41,13 +33,8 @@ DASHBOARD_FORWARD_PID="$CONFIG_DIR/dashboard-forward.pid"
 DASHBOARD_SOCAT_PID="$CONFIG_DIR/dashboard-socat.pid"
 ADMIN_URL="http://127.0.0.1:5000"
 
-# PostgreSQL runs natively in Termux as the Termux user. proot's fake root cannot run
-# initdb or the postmaster (filesystem ownership checks fail), but the container shares
-# the network stack with Termux, so the services still reach the database on
-# 127.0.0.1:5432.
 TERMUX_PGDATA="$TERMUX_PREFIX/var/lib/postgresql"
 
-# Paths as seen by processes inside the container.
 UBUNTU_SOLACE_DIR="/root/Solace"
 UBUNTU_CONFIG_DIR="/root/.config/solace"
 UBUNTU_ENV_FILE="/root/.config/solace/termux.env"
@@ -58,10 +45,7 @@ export PATH="$HOME/.dotnet:$HOME/.dotnet/tools:$PATH"
 export DOTNET_CLI_TELEMETRY_OPTOUT=1
 export DOTNET_NOLOGO=1'
 
-# ─── SELF-UPDATE ──────────────────────────────────────────
-
 update_self() {
-    # Never overwrite a copy that is being run from a git checkout.
     [ -n "$LAUNCHER_PATH" ] || return
     command -v curl >/dev/null 2>&1 || return
     TMP_PATH="$(mktemp "$TERMUX_PREFIX/tmp/.solace_update_XXXXXX" 2>/dev/null || mktemp)"
@@ -80,8 +64,6 @@ update_self() {
     fi
     rm -f "$TMP_PATH"
 }
-
-# ─── HELP ─────────────────────────────────────────────────
 
 show_help() {
     echo -e "${BLU}"
@@ -142,8 +124,6 @@ section_title() {
     echo ""
 }
 
-# ─── STATUS HELPERS ───────────────────────────────────────
-
 get_apphost_pid() {
     [ -f "$STARTUP_JSON" ] || return
     sed -n 's/.*"appHostPid": *\([0-9][0-9]*\).*/\1/p' "$STARTUP_JSON" | tail -n1
@@ -160,8 +140,6 @@ get_dashboard_url() {
         url="$(sed -n 's/.*"dashboardUrl": *"\([^"]*\)".*/\1/p' "$STARTUP_JSON" | tail -n1 | sed 's/\\u0026/\&/g; s/\\//g')"
     fi
 
-    # The CLI keeps the detached startup JSON buffered, so on a running server it can
-    # still be empty. Fall back to the AppHost log, which always prints the login URL.
     if [ -z "$url" ]; then
         log="$(ls -t "$UBUNTU_HOME"/.aspire/logs/cli_*detach-child*.log 2>/dev/null | head -n1)"
         if [ -n "$log" ] && [ -f "$log" ]; then
@@ -246,7 +224,6 @@ get_cli_log() {
     sed -n 's/.*"logFile": *"\([^"]*\)".*/\1/p' "$STARTUP_JSON" | tail -n1 | sed 's/\\//g'
 }
 
-# Translate a path from inside the container to a Termux path.
 host_path() {
     case "$1" in
         /root/*) printf '%s%s\n' "$UBUNTU_HOME" "${1#/root}" ;;
@@ -263,9 +240,6 @@ is_process_alive() {
     fi
     pid="$(get_apphost_pid)"
     [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
-    # Match the built executable path, not the CLI command line (which contains the
-    # project path and used to make a dead server look alive). The bracket keeps a
-    # diagnostic shell command from matching itself.
     pgrep -x "Solace.AppHost" >/dev/null 2>&1 ||
         pgrep -f '[b]in/Debug/net11.0/Solace.AppHost' >/dev/null 2>&1
 }
@@ -279,8 +253,6 @@ is_running() {
 is_starting() {
     is_process_alive && ! is_running
 }
-
-# ─── ENVIRONMENT ──────────────────────────────────────────
 
 load_env() {
     if [ ! -f "$ENV_FILE" ]; then
@@ -335,8 +307,6 @@ save_settings_value() {
     sed -i "s|\"$key\": *\"[^\"]*\"|\"$key\": \"$value\"|" "$SETTINGS_FILE"
 }
 
-# ─── UBUNTU HELPERS ───────────────────────────────────────
-
 open_url() {
     local url="$1"
     if command -v termux-open-url >/dev/null 2>&1; then
@@ -359,6 +329,11 @@ launch_web_portal() {
 
 launch_aspire_panel() {
     local url
+    if ! is_process_alive; then
+        echo "[Solace] The server is not running. Start the server first."
+        return 1
+    fi
+    start_dashboard_forwarder
     url="$(get_public_dashboard_url)"
     [ -n "$url" ] || url="$(get_dashboard_url)"
     if [ -z "$url" ]; then
@@ -421,8 +396,6 @@ done' 2>/dev/null)"
     return 0
 }
 
-# ─── POSTGRESQL (Termux-native) ───────────────────────────
-
 pg_ready() {
     pg_isready -q -h 127.0.0.1 -p 5432 2>/dev/null
 }
@@ -450,8 +423,6 @@ stop_postgres() {
 }
 
 with_postgres() {
-    # Runs $1 with PostgreSQL online. If the database was not running, it is stopped
-    # again afterwards. Maintenance payloads use $SOLACE_DB_PASSWORD from termux.env.
     local payload="$1" started=0 rc
     if ! pg_ready; then
         start_postgres || return 1
@@ -462,8 +433,6 @@ with_postgres() {
     [ "$started" -eq 1 ] && stop_postgres
     return "$rc"
 }
-
-# ─── START / STOP ─────────────────────────────────────────
 
 start_server() {
     if is_process_alive; then
@@ -481,8 +450,6 @@ start_server() {
     rm -f "$STARTUP_JSON" "$PID_FILE"
     : > "$STARTUP_LOG"
 
-    # The wrapper stays alive while the AppHost runs. This keeps the proot session (and
-    # therefore the server and PostgreSQL) alive after the TUI exits.
     nohup proot-distro login ubuntu -- env \
         ENV_FILE="$UBUNTU_ENV_FILE" \
         STARTUP_JSON="$UBUNTU_STARTUP_JSON" \
@@ -570,8 +537,6 @@ stop_server() {
     rm -f "$PID_FILE" "$STARTUP_JSON"
 }
 
-# ─── EULA ─────────────────────────────────────────────────
-
 eula_confirmation_loop() {
     load_env
     [ "${Shared__AcceptMinecraftEula:-false}" = "true" ] && return 0
@@ -607,8 +572,6 @@ eula_confirmation_loop() {
     done
 }
 
-# ─── FIRST START CHECKS ───────────────────────────────────
-
 first_start_checks() {
     load_env
 
@@ -640,8 +603,6 @@ first_start_checks() {
     return 0
 }
 
-# ─── LOGS ─────────────────────────────────────────────────
-
 read_password_from_log() {
     local log="$1"
     [ -n "$log" ] && [ -f "$log" ] || return 1
@@ -666,9 +627,6 @@ get_admin_password() {
         fi
     done
 
-    # DCP stores each resource's stdout in /tmp/aspire-dcp*/<id>_out. The initial
-    # password is only printed once (when the database is first created), so this is
-    # the most reliable place to recover it from.
     for f in $(ls -t "$PROOT_ROOTFS"/tmp/aspire-dcp*/*_out 2>/dev/null); do
         password="$(read_password_from_log "$f")"
         if [ -n "$password" ]; then
@@ -677,7 +635,6 @@ get_admin_password() {
         fi
     done
 
-    # Resource logs are not written to the CLI log, so ask the Aspire backchannel.
     if is_process_alive; then
         password="$(ubuntu_dotnet timeout 60 aspire logs web-portal --apphost "$UBUNTU_APP_HOST" --tail 5000 2>/dev/null \
             | sed -n 's/.*Password: *//p' \
@@ -746,8 +703,6 @@ logs_menu() {
     done
 }
 
-# ─── PROCESS VIEWER ───────────────────────────────────────
-
 process_viewer() {
     while true; do
         clear; show_banner
@@ -797,8 +752,6 @@ process_viewer() {
     done
 }
 
-# ─── UPDATE ───────────────────────────────────────────────
-
 update_solace() {
     load_env
     stop_server
@@ -834,8 +787,6 @@ INNER
     printf "Press ENTER..."
     pause
 }
-
-# ─── SETTINGS ─────────────────────────────────────────────
 
 change_public_ip() {
     load_env
@@ -952,11 +903,9 @@ uninstall_solace() {
     stop_server
 
     if [ -f "$TERMUX_PGDATA/.solace-managed" ]; then
-        # The cluster was created by the installer, so remove it completely.
         stop_postgres
         rm -rf "$TERMUX_PGDATA"
     else
-        # Keep a cluster the user created themselves; just drop the Solace objects.
         if [ -f "$ENV_FILE" ]; then
             set -a
             . "$ENV_FILE"
@@ -1005,8 +954,6 @@ settings_menu() {
     done
 }
 
-# ─── INFORMATION ──────────────────────────────────────────
-
 info_panel() {
     load_env
     clear; show_banner
@@ -1046,8 +993,6 @@ info_panel() {
     echo ""
     printf "Back\n" | fzf --height=12% --reverse --border --prompt="Info > " >/dev/null
 }
-
-# ─── COMMAND LINE ─────────────────────────────────────────
 
 case "${1:-}" in
     help|--help|-h) update_self "$@"; show_help ;;
@@ -1145,8 +1090,6 @@ if [ "${1:-}" = "uninstall" ]; then
     uninstall_solace
     exit 0
 fi
-
-# ─── MAIN DASHBOARD ───────────────────────────────────────
 
 if [ "${1:-}" = "__dashboard-forward" ]; then
     load_env

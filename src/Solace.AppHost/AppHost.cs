@@ -6,10 +6,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Solace.AppHost;
 
-// The AppHost launch profile forces the Development environment (and HTTPS dashboard
-// endpoints) when the Aspire CLI starts this project. Termux runs without Docker and must
-// load appsettings.Termux.json instead, so switch the environment before the builder is
-// created. Termux__Enabled is set by the Termux launcher (see termux.env).
 if (string.Equals(Environment.GetEnvironmentVariable("Termux__Enabled"), "true", StringComparison.OrdinalIgnoreCase))
 {
     Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", "Termux");
@@ -26,16 +22,10 @@ var builder = DistributedApplication.CreateBuilder(args);
 var migrationMode = builder.Configuration.GetValue<bool>("migration-mode");
 var testMode = builder.Configuration.GetValue<bool>("TestMode");
 
-// Termux runs inside proot-distro without Docker. Postgres and nginx are provided by
-// the Termux setup script instead of containers, and database connection strings are
-// supplied through the ConnectionStrings__* environment variables.
 var termuxMode = builder.Configuration.GetValue<bool>("Termux:Enabled");
 
 if (termuxMode)
 {
-    // Phones are slow and the bundled DCP apiserver is a large Go binary that is read
-    // from cold storage during startup. Pre-warm it and widen Aspire's fixed 20 second
-    // Kubernetes readiness timeout so DCP can start reliably under proot-distro.
     TermuxDcp.Prepare(builder.Services);
 }
 
@@ -568,8 +558,6 @@ if (!termuxMode)
 
 authServer.WithReference(webPortal);
 
-// Termux has no Docker, so the services are exposed on their individual ports
-// (5000, 8080, 8088, 8089 and 8090) instead of going through nginx.
 if (!termuxMode)
 {
     builder.AddContainer("nginx", "nginx", "alpine")
@@ -586,18 +574,12 @@ if (!termuxMode)
 
 if (termuxMode)
 {
-    // There is no nginx in Termux mode, so every public service port must be reachable
-    // directly from the LAN instead of only through the DCP loopback proxy.
     apiServer.WithExternalHttpEndpoints();
     cdn.WithExternalHttpEndpoints();
     authServer.WithExternalHttpEndpoints();
     webPortal.WithExternalHttpEndpoints();
     locator.WithExternalHttpEndpoints();
 
-    // DCP proxies listen on loopback only. Bind the public HTTP services directly to
-    // their fixed ports and all interfaces so other devices on the Wi-Fi can connect.
-    // Proxyless endpoints require a target port; ASP.NET Core derives its listener from
-    // the target host.
     apiServer.WithEndpoint("http", endpoint =>
     {
         endpoint.IsProxied = false;
@@ -630,9 +612,6 @@ if (termuxMode)
     });
 }
 
-// The AppHost runs in the Termux environment, but the services must keep using the
-// standard Development environment: the /health endpoints used by the AppHost health
-// checks are only mapped in Development (see ServiceDefaults.MapDefaultEndpoints).
 if (termuxMode)
 {
     foreach (var project in builder.Resources.OfType<ProjectResource>())
