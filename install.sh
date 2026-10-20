@@ -40,7 +40,7 @@ help_text() {
     echo "  Termux (Android)   Uses proot-distro + Ubuntu"
     echo ""
     echo "For Docker-based Linux/macOS installs, see docs/Installation.md."
-    echo "After installation, run: earth"
+    echo "After installation, run: solace"
     exit 0
 }
 
@@ -97,8 +97,8 @@ if [ -n "$TERMUX_VERSION" ] || echo "$PREFIX" | grep -q "com.termux"; then
     dpkg --configure -a >/dev/null 2>&1 || true
 
     print_step "1. CHECKING TERMUX PACKAGES"
-    command -v fzf >/dev/null 2>&1 || pkg install -y fzf || err "Failed to install fzf"
     command -v pgrep >/dev/null 2>&1 || pkg install -y procps || err "Failed to install procps"
+    command -v python3 >/dev/null 2>&1 || pkg install -y python || err "Failed to install python"
     command -v curl >/dev/null 2>&1 || pkg install -y curl || err "Failed to install curl"
     command -v ifconfig >/dev/null 2>&1 || pkg install -y net-tools || true
     command -v socat >/dev/null 2>&1 || pkg install -y socat || true
@@ -212,7 +212,7 @@ apt-get update -qq
 
 echo "  [2/7] Installing system dependencies"
 apt-get install -y -qq \
-    ca-certificates curl wget git unzip fzf openssl \
+    ca-certificates curl wget git unzip openssl \
     openjdk-21-jre-headless libicu-dev \
     procps psmisc iproute2 tzdata \
     libfontconfig1 libfreetype6 >/dev/null
@@ -442,35 +442,45 @@ INNER_SETUP
 
     ok "Ubuntu configured"
 
-    print_step "6. CREATING EARTH COMMAND"
-    mkdir -p "$PREFIX/bin"
+    print_step "6. INSTALLING SOLACE LAUNCHER"
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd || true)"
-    EARTH_SOURCE=""
+    ROOTFS_SOURCE="$PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs/root/Solace"
+    LAUNCHER_SOURCE=""
 
-    if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/distros/Termux.sh" ]; then
-        EARTH_SOURCE="$SCRIPT_DIR/distros/Termux.sh"
-    elif [ -f "$PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs/root/Solace/distros/Termux.sh" ]; then
-        EARTH_SOURCE="$PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs/root/Solace/distros/Termux.sh"
+    if [ -f "$ROOTFS_SOURCE/distros/solace" ]; then
+        LAUNCHER_SOURCE="$ROOTFS_SOURCE"
+    elif [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/distros/solace" ]; then
+        LAUNCHER_SOURCE="$SCRIPT_DIR"
+    fi
+    [ -n "$LAUNCHER_SOURCE" ] || err "Launcher files are missing from the Ubuntu checkout. Re-run install.sh."
+    for launcher_file in distros/solace distros/solace-backend.sh distros/solace_launcher.py distros/launcher/index.html; do
+        [ -f "$LAUNCHER_SOURCE/$launcher_file" ] || err "Launcher file missing: $launcher_file. Re-run install.sh."
+    done
+
+    LAUNCHER_PID_FILE="$HOME/.config/solace-launcher/launcher.pid"
+    if [ -f "$LAUNCHER_PID_FILE" ]; then
+        OLD_LAUNCHER_PID="$(cat "$LAUNCHER_PID_FILE" 2>/dev/null || true)"
+        [ -n "$OLD_LAUNCHER_PID" ] && kill "$OLD_LAUNCHER_PID" 2>/dev/null || true
+        rm -f "$LAUNCHER_PID_FILE"
     fi
 
-    if [ -n "$EARTH_SOURCE" ]; then
-        cp "$EARTH_SOURCE" "$PREFIX/bin/earth"
-    else
-        for url in \
-            "https://raw.githubusercontent.com/$GITHUB_REPO/refs/heads/$GITHUB_BRANCH/distros/Termux.sh" \
-            "https://cdn.jsdelivr.net/gh/$GITHUB_REPO@$GITHUB_BRANCH/distros/Termux.sh" \
-            "https://github.com/$GITHUB_REPO/raw/refs/heads/$GITHUB_BRANCH/distros/Termux.sh"; do
-            if curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 30 "$url" -o "$PREFIX/bin/earth"; then
-                EARTH_SOURCE="download"
-                break
-            fi
-            rm -f "$PREFIX/bin/earth"
-        done
-        [ -n "$EARTH_SOURCE" ] || err "Failed to download the earth launcher; check the network and re-run install.sh"
+    mkdir -p "$PREFIX/libexec/solace" "$PREFIX/bin"
+    rm -rf "$PREFIX/libexec/solace/web"
+    mkdir -p "$PREFIX/libexec/solace/web/assets"
+    cp "$LAUNCHER_SOURCE/distros/solace" "$PREFIX/bin/solace"
+    cp "$LAUNCHER_SOURCE/distros/solace-backend.sh" "$PREFIX/libexec/solace/backend.sh"
+    cp "$LAUNCHER_SOURCE/distros/solace_launcher.py" "$PREFIX/libexec/solace/launcher.py"
+    cp -a "$LAUNCHER_SOURCE/distros/launcher/." "$PREFIX/libexec/solace/web/"
+    if [ -f "$LAUNCHER_SOURCE/images/solace_branding_compact.png" ]; then
+        cp "$LAUNCHER_SOURCE/images/solace_branding_compact.png" "$PREFIX/libexec/solace/web/assets/branding.png"
     fi
-
-    chmod +x "$PREFIX/bin/earth"
-    ok "earth command installed"
+    if [ -f "$LAUNCHER_SOURCE/images/solace_banner.png" ]; then
+        cp "$LAUNCHER_SOURCE/images/solace_banner.png" "$PREFIX/libexec/solace/web/assets/banner.png"
+    fi
+    chmod 755 "$PREFIX/bin/solace" "$PREFIX/libexec/solace/backend.sh" "$PREFIX/libexec/solace/launcher.py"
+    chmod -R u+rwX,go+rX "$PREFIX/libexec/solace/web"
+    rm -f "$PREFIX/bin/earth"
+    ok "Solace Launcher installed on port 7089"
 
     echo ""
     echo -e "${GRN}========================================${RST}"
@@ -493,17 +503,16 @@ INNER_SETUP
     echo -e "${CYN}Next steps:${RST}"
     echo "  1. Download the resource pack and save it as:"
     echo "     ~/Solace/staticdata/resourcepacks/vanilla.zip (inside Ubuntu)"
-    echo "  2. Run: earth"
-    echo "  3. Accept the Minecraft EULA from the TUI"
-    echo "  4. Start the server, then choose Launch Web Portal or run: earth portal"
-    echo "  5. Check Settings > Show Admin Account for the initial password"
+    echo "  2. Run: solace"
+    echo "  3. Accept the Minecraft EULA in Solace Launcher"
+    echo "  4. Start the server and open the web portal from the launcher"
+    echo "  5. Use the Admin account button for the initial password"
+    echo ""
+    echo -e "${CYN}Launcher:${RST} http://127.0.0.1:7089"
     echo ""
     echo -e "${CYN}Useful commands:${RST}"
-    echo "  earth              TUI menu"
-    echo "  earth portal       open the Solace web portal"
-    echo "  earth aspire       open the Aspire panel"
-    echo "  earth eula         accept the Minecraft EULA"
-    echo "  earth uninstall    remove Solace completely"
+    echo "  solace              open Solace Launcher"
+    echo "  solace -u           remove Solace completely"
     echo ""
     exit 0
 fi

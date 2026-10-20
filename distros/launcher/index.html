@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#070b24">
+  <title>Solace Launcher</title>
+  <link rel="icon" href="/assets/branding.png">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="backdrop" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Solace Launcher home">
+      <img src="/assets/branding.png" alt="Solace Project">
+    </a>
+    <div class="brand-text">
+      <span>Solace</span>
+      <strong>Launcher</strong>
+    </div>
+    <div class="status-pill" id="status-pill">
+      <span class="status-dot"></span>
+      <span id="status-label">Checking…</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Termux + Aspire control deck</p>
+        <h1>Your world,<br><em>ready when you are.</em></h1>
+        <p class="lede">
+          Start the server, open the Solace portal, and keep an eye on the Aspire
+          stack without leaving your browser.
+        </p>
+        <div class="hero-actions">
+          <button class="button primary" id="start-button">Start server</button>
+          <button class="button ghost" id="stop-button">Stop server</button>
+          <a class="button link" id="portal-button" href="#" target="_blank" rel="noopener">Open portal <span>↗</span></a>
+        </div>
+        <p class="hint" id="hero-hint">Loading launcher status…</p>
+      </div>
+      <div class="hero-mark" aria-hidden="true">
+        <div class="orb"></div>
+        <img src="/assets/branding.png" alt="">
+      </div>
+    </section>
+
+    <section class="notice hidden" id="eula-notice">
+      <div>
+        <strong>Minecraft EULA</strong>
+        <p>The server cannot start until the Minecraft EULA is accepted.</p>
+      </div>
+      <button class="button small primary" id="accept-eula">Accept EULA</button>
+    </section>
+
+    <section class="notice warning hidden" id="pack-notice">
+      <div>
+        <strong>Resource pack missing</strong>
+        <p>Add <code>vanilla.zip</code> to <code>staticdata/resourcepacks</code> for textures and previews.</p>
+      </div>
+    </section>
+
+    <div class="grid">
+      <section class="card status-card">
+        <div class="card-heading">
+          <div>
+            <p class="eyebrow">Runtime</p>
+            <h2>Server status</h2>
+          </div>
+          <span class="state-badge" id="state-badge">Unknown</span>
+        </div>
+        <div class="facts">
+          <div><span>Version</span><strong id="fact-version">—</strong></div>
+          <div><span>Branch</span><strong id="fact-branch">—</strong></div>
+          <div><span>Install</span><strong id="fact-mode">—</strong></div>
+          <div><span>Public IP</span><strong id="fact-ip">—</strong></div>
+        </div>
+        <div class="progress" id="startup-progress" aria-hidden="true"><span></span></div>
+        <p class="muted" id="status-copy">The launcher is checking the local server.</p>
+      </section>
+
+      <section class="card">
+        <div class="card-heading">
+          <div>
+            <p class="eyebrow">Shortcuts</p>
+            <h2>Jump in</h2>
+          </div>
+        </div>
+        <div class="link-list">
+          <a class="shortcut" id="dashboard-link" href="#" target="_blank" rel="noopener">
+            <span class="shortcut-icon">◈</span>
+            <span><strong>Aspire dashboard</strong><small>Service health and live logs</small></span>
+            <span class="chevron">↗</span>
+          </a>
+          <a class="shortcut" id="portal-link" href="#" target="_blank" rel="noopener">
+            <span class="shortcut-icon">▣</span>
+            <span><strong>Solace web portal</strong><small>Admin panel and buildplates</small></span>
+            <span class="chevron">↗</span>
+          </a>
+          <button class="shortcut as-button" id="password-button">
+            <span class="shortcut-icon">✦</span>
+            <span><strong>Admin account</strong><small>Reveal the generated password</small></span>
+            <span class="chevron">→</span>
+          </button>
+        </div>
+        <div class="admin-secret hidden" id="admin-secret">
+          <span>admin@solace.com</span>
+          <code id="admin-password">••••••••</code>
+        </div>
+      </section>
+
+      <section class="card services-card">
+        <div class="card-heading">
+          <div>
+            <p class="eyebrow">Endpoints</p>
+            <h2>Services</h2>
+          </div>
+          <span class="muted small">LAN</span>
+        </div>
+        <div class="service-list" id="service-list"></div>
+      </section>
+
+      <section class="card settings-card">
+        <div class="card-heading">
+          <div>
+            <p class="eyebrow">Configuration</p>
+            <h2>Launcher settings</h2>
+          </div>
+        </div>
+        <form id="ip-form" class="field-row">
+          <label for="public-ip">Public endpoint</label>
+          <div class="input-row">
+            <input id="public-ip" name="ip" autocomplete="off" spellcheck="false" placeholder="192.168.1.50">
+            <button class="button small primary" type="submit">Save</button>
+          </div>
+          <p class="muted">Use the phone's LAN IP so other devices can join. Restart the server afterwards.</p>
+        </form>
+        <div class="settings-actions">
+          <button class="button small ghost" id="update-button">Update Solace</button>
+          <button class="button small ghost" id="logs-button">Open logs</button>
+        </div>
+      </section>
+    </div>
+
+    <section class="log-panel" id="log-panel">
+      <div class="card-heading">
+        <div>
+          <p class="eyebrow">Diagnostics</p>
+          <h2>Logs</h2>
+        </div>
+        <div class="log-actions">
+          <select id="log-source" aria-label="Log source">
+            <option value="startup">Startup</option>
+            <option value="web-portal">Web portal</option>
+            <option value="api-server">API server</option>
+            <option value="auth-server">Auth server</option>
+            <option value="locator">Locator</option>
+            <option value="cdn">CDN</option>
+            <option value="event-bus">Event bus</option>
+            <option value="object-store">Object store</option>
+          </select>
+          <button class="button small ghost" id="refresh-logs">Refresh</button>
+        </div>
+      </div>
+      <pre id="log-output">Select a log and press Refresh.</pre>
+    </section>
+  </main>
+
+  <footer>
+    <span><strong>Solace Launcher</strong> · port 7089</span>
+    <span>Uninstall with <code>solace -u</code></span>
+  </footer>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

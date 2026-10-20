@@ -1,0 +1,144 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -u
+
+PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+BASE_DIR="$PREFIX/libexec/solace"
+BACKEND="$BASE_DIR/backend.sh"
+LAUNCHER="$BASE_DIR/launcher.py"
+CONFIG_DIR="${SOLACE_LAUNCHER_CONFIG:-$HOME/.config/solace-launcher}"
+PID_FILE="$CONFIG_DIR/launcher.pid"
+LOG_FILE="$CONFIG_DIR/launcher.log"
+PORT="${SOLACE_LAUNCHER_PORT:-7089}"
+URL="http://127.0.0.1:$PORT"
+PYTHON="${SOLACE_PYTHON:-$PREFIX/bin/python3}"
+
+show_help() {
+    cat <<'EOF'
+Solace Launcher
+
+Usage:
+  solace              Start the launcher and open http://127.0.0.1:7089
+  solace -u           Uninstall Solace completely
+  solace --uninstall  Same as -u
+  solace -h           Show this help
+
+The launcher is a local web UI for starting the server, reading logs, updating
+Solace, and opening the web portal and Aspire dashboard.
+
+Environment:
+  SOLACE_LAUNCHER_PORT   Launcher port (default: 7089)
+  SOLACE_LAUNCHER_BIND   Bind address (default: 127.0.0.1)
+  SOLACE_NO_OPEN=1       Do not open a browser automatically
+EOF
+}
+
+stop_launcher() {
+    local pid=""
+    if [ -f "$PID_FILE" ]; then
+        pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    fi
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null || true
+        local waited=0
+        while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 30 ]; do
+            sleep 0.1
+            waited=$((waited + 1))
+        done
+        kill -9 "$pid" 2>/dev/null || true
+    fi
+    rm -f "$PID_FILE"
+}
+
+open_launcher() {
+    echo "Solace Launcher: $URL"
+    if [ "${SOLACE_NO_OPEN:-0}" = "1" ]; then
+        return 0
+    fi
+    if command -v termux-open-url >/dev/null 2>&1; then
+        termux-open-url "$URL" >/dev/null 2>&1 || true
+    else
+        echo "Open this URL in your browser."
+    fi
+}
+
+uninstall() {
+    echo ""
+    echo "This permanently removes Solace, its databases, and configuration."
+    echo ""
+    printf "Type YES to continue: "
+    read -r CONFIRM || exit 1
+    [ "$CONFIRM" = "YES" ] || { echo "Cancelled."; exit 1; }
+
+    stop_launcher
+
+    if [ -x "$BACKEND" ]; then
+        "$BACKEND" uninstall --yes
+    else
+        echo "The Solace backend is missing; removing the launcher files."
+    fi
+
+    rm -rf "$BASE_DIR" "$PREFIX/share/solace" "$CONFIG_DIR"
+    rm -f "$PREFIX/bin/solace" "$PREFIX/bin/earth"
+    echo "Solace Launcher removed."
+    exit 0
+}
+
+case "${1:-}" in
+    -h|--help|help)
+        show_help
+        exit 0
+        ;;
+    -u|--uninstall)
+        uninstall
+        ;;
+    "")
+        ;;
+    *)
+        echo "Unknown option: $1" >&2
+        show_help >&2
+        exit 1
+        ;;
+esac
+
+if [ ! -x "$PYTHON" ]; then
+    echo "Python 3 is not installed. Re-run install.sh." >&2
+    exit 1
+fi
+if [ ! -x "$BACKEND" ] || [ ! -f "$LAUNCHER" ]; then
+    echo "Solace Launcher files are missing. Re-run install.sh." >&2
+    exit 1
+fi
+
+if curl -fsS --max-time 1 "$URL/api/health" >/dev/null 2>&1; then
+    open_launcher
+    exit 0
+fi
+
+mkdir -p "$CONFIG_DIR"
+if [ -f "$PID_FILE" ]; then
+    OLD_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+        kill "$OLD_PID" 2>/dev/null || true
+    fi
+    rm -f "$PID_FILE"
+fi
+
+nohup "$PYTHON" "$LAUNCHER" >>"$LOG_FILE" 2>&1 &
+disown 2>/dev/null || true
+
+READY=0
+for _ in $(seq 1 50); do
+    if curl -fsS --max-time 1 "$URL/api/health" >/dev/null 2>&1; then
+        READY=1
+        break
+    fi
+    sleep 0.2
+done
+
+if [ "$READY" -ne 1 ]; then
+    echo "Solace Launcher failed to start." >&2
+    [ -f "$LOG_FILE" ] && tail -n 30 "$LOG_FILE" >&2
+    exit 1
+fi
+
+open_launcher
