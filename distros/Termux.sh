@@ -36,6 +36,9 @@ LOG_DIR="$CONFIG_DIR/logs"
 STARTUP_JSON="$LOG_DIR/startup.json"
 STARTUP_LOG="$LOG_DIR/startup.log"
 PID_FILE="$CONFIG_DIR/server.pid"
+DASHBOARD_PORT="${SOLACE_DASHBOARD_PORT:-18888}"
+DASHBOARD_FORWARD_PID="$CONFIG_DIR/dashboard-forward.pid"
+DASHBOARD_SOCAT_PID="$CONFIG_DIR/dashboard-socat.pid"
 ADMIN_URL="http://127.0.0.1:5000"
 
 # PostgreSQL runs natively in Termux as the Termux user. proot's fake root cannot run
@@ -103,6 +106,7 @@ show_help() {
     echo ""
     echo "Platform: Termux (Android) - proot-distro + Ubuntu"
     echo "Server:   Aspire AppHost / Web Portal"
+    echo "Dashboard: http://<LAN-IP>:18888 (current login link: earth status)"
     echo ""
     exit 0
 }
@@ -166,6 +170,78 @@ get_dashboard_url() {
     [ -n "$url" ] && printf '%s\n' "$url"
 }
 
+# The Aspire dashboard listens on a random loopback port that changes every time the
+# AppHost starts. socat keeps it reachable at a stable LAN port; the login token itself
+# still rotates and is printed by `earth status`.
+get_public_dashboard_url() {
+    local url
+    url="$(get_dashboard_url)"
+    [ -n "$url" ] || return
+    printf '%s\n' "$url" | sed "s|^http://[^/]*|http://$PUBLIC_IP:$DASHBOARD_PORT|"
+}
+
+start_dashboard_forwarder() {
+    command -v socat >/dev/null 2>&1 || {
+        echo "[Solace] socat is not installed; the dashboard stays loopback-only."
+        echo "[Solace] Install it with: pkg install socat"
+        return 0
+    }
+
+    if [ -f "$DASHBOARD_FORWARD_PID" ]; then
+        local old
+        old="$(cat "$DASHBOARD_FORWARD_PID" 2>/dev/null)"
+        [ -n "$old" ] && kill -0 "$old" 2>/dev/null && return 0
+    fi
+
+    nohup bash "$SELF_PATH" __dashboard-forward >/dev/null 2>&1 &
+    echo "$!" > "$DASHBOARD_FORWARD_PID"
+    disown 2>/dev/null || true
+}
+
+stop_dashboard_forwarder() {
+    local pid
+    if [ -f "$DASHBOARD_FORWARD_PID" ]; then
+        pid="$(cat "$DASHBOARD_FORWARD_PID" 2>/dev/null)"
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+        rm -f "$DASHBOARD_FORWARD_PID"
+    fi
+    if [ -f "$DASHBOARD_SOCAT_PID" ]; then
+        pid="$(cat "$DASHBOARD_SOCAT_PID" 2>/dev/null)"
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+        rm -f "$DASHBOARD_SOCAT_PID"
+    fi
+}
+
+dashboard_forward_loop() {
+    local url port last_port="" socat_pid=""
+
+    while is_process_alive; do
+        url="$(get_dashboard_url)"
+        port="$(printf '%s' "$url" | sed -n 's|^http://[^:/]*:\([0-9][0-9]*\)/.*|\1|p')"
+
+        if [ -n "$port" ] && {
+            [ "$port" != "$last_port" ] ||
+            [ -z "$socat_pid" ] ||
+            ! kill -0 "$socat_pid" 2>/dev/null;
+        }; then
+            if [ -n "$socat_pid" ]; then
+                kill "$socat_pid" 2>/dev/null || true
+                wait "$socat_pid" 2>/dev/null || true
+            fi
+            socat "TCP-LISTEN:$DASHBOARD_PORT,bind=0.0.0.0,reuseaddr,fork" \
+                "TCP:127.0.0.1:$port" >/dev/null 2>&1 &
+            socat_pid=$!
+            echo "$socat_pid" > "$DASHBOARD_SOCAT_PID"
+            last_port="$port"
+        fi
+
+        sleep 5
+    done
+
+    [ -n "$socat_pid" ] && kill "$socat_pid" 2>/dev/null || true
+    rm -f "$DASHBOARD_SOCAT_PID"
+}
+
 get_cli_log() {
     [ -f "$STARTUP_JSON" ] || return
     sed -n 's/.*"logFile": *"\([^"]*\)".*/\1/p' "$STARTUP_JSON" | tail -n1 | sed 's/\\//g'
@@ -218,6 +294,7 @@ load_env() {
     set +a
 
     PUBLIC_IP="${SOLACE_PUBLIC_IP:-127.0.0.1}"
+    DASHBOARD_PORT="${SOLACE_DASHBOARD_PORT:-18888}"
     INSTALL_BRANCH="${SOLACE_BRANCH:-$GITHUB_BRANCH}"
     ADMIN_URL="http://$PUBLIC_IP:5000"
     if [ -f "$SETTINGS_FILE" ]; then
@@ -427,10 +504,13 @@ start_server() {
     done
 
     echo "Solace is starting. The first start can take several minutes."
+    start_dashboard_forwarder
     return 0
 }
 
 stop_server() {
+    stop_dashboard_forwarder
+
     if [ -f "$SOLACE_DIR/src/Solace.AppHost/Solace.AppHost.csproj" ]; then
         ubuntu_dotnet aspire stop --non-interactive --apphost "$UBUNTU_APP_HOST" >/dev/null 2>&1 &
         local stopper=$!
@@ -917,7 +997,8 @@ info_panel() {
     echo "  Buildplate:       $PUBLIC_IP:19132+"
     echo ""
     local dashboard
-    dashboard="$(get_dashboard_url)"
+    dashboard="$(get_public_dashboard_url)"
+    [ -z "$dashboard" ] && dashboard="$(get_dashboard_url)"
     if [ -n "$dashboard" ]; then
         echo "  Aspire Dashboard: $dashboard"
     else
@@ -973,6 +1054,7 @@ if [ "${1:-}" = "start" ]; then
         exit 1
     fi
     if is_process_alive; then
+        start_dashboard_forwarder
         echo "[Solace] Already running."
         exit 0
     fi
@@ -992,12 +1074,16 @@ if [ "${1:-}" = "status" ]; then
     load_env
     if is_running; then
         echo "[Solace] RUNNING  $ADMIN_URL"
-        dashboard="$(get_dashboard_url)"
+        dashboard="$(get_public_dashboard_url)"
+        [ -n "$dashboard" ] || dashboard="$(get_dashboard_url)"
         [ -n "$dashboard" ] && echo "[Solace] Dashboard: $dashboard"
         exit 0
     fi
     if is_process_alive; then
         echo "[Solace] STARTING $ADMIN_URL"
+        dashboard="$(get_public_dashboard_url)"
+        [ -n "$dashboard" ] || dashboard="$(get_dashboard_url)"
+        [ -n "$dashboard" ] && echo "[Solace] Dashboard: $dashboard"
         exit 0
     fi
     echo "[Solace] STOPPED"
@@ -1026,6 +1112,14 @@ if [ "${1:-}" = "uninstall" ]; then
 fi
 
 # ─── MAIN DASHBOARD ───────────────────────────────────────
+
+# Internal worker: keeps the fixed LAN dashboard port pointed at the dashboard's
+# current random loopback port. Started in the background by start_server.
+if [ "${1:-}" = "__dashboard-forward" ]; then
+    load_env
+    dashboard_forward_loop
+    exit 0
+fi
 
 update_self "$@"
 require_rootfs || { echo "Run install.sh first."; exit 1; }
@@ -1071,7 +1165,8 @@ while true; do
             fi
             ;;
         2)
-            DASH_URL="$(get_dashboard_url)"
+            DASH_URL="$(get_public_dashboard_url)"
+            [ -z "$DASH_URL" ] && DASH_URL="$(get_dashboard_url)"
             if [ -n "$DASH_URL" ]; then
                 open_url "$DASH_URL"
             else

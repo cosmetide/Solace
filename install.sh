@@ -79,6 +79,7 @@ if [ -n "$TERMUX_VERSION" ] || echo "$PREFIX" | grep -q "com.termux"; then
     command -v pgrep >/dev/null 2>&1 || pkg install -y procps || err "Failed to install procps"
     command -v curl >/dev/null 2>&1 || pkg install -y curl || err "Failed to install curl"
     command -v ifconfig >/dev/null 2>&1 || pkg install -y net-tools || true
+    command -v socat >/dev/null 2>&1 || pkg install -y socat || true
     command -v initdb >/dev/null 2>&1 || pkg install -y postgresql || err "Failed to install postgresql"
     hash -r
     ok "Termux packages installed"
@@ -346,6 +347,7 @@ write_env BuildplateLauncher__ConnectorPluginJarName 'buildplate-connector-plugi
 echo "" >> "$ENV_FILE"
 
 write_env SOLACE_PUBLIC_IP "$PUBLIC_IP_VALUE"
+write_env SOLACE_DASHBOARD_PORT 18888
 write_env SOLACE_BRANCH "$GITHUB_BRANCH"
 chmod 600 "$ENV_FILE"
 
