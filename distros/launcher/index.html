@@ -3,21 +3,84 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#06152f">
+  <meta name="theme-color" content="#0d1117">
   <title>Solace Launcher</title>
-  <link rel="icon" href="/assets/branding.png">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+  <link rel="apple-touch-icon" href="/assets/favicon.png">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <div class="page-glow" aria-hidden="true"></div>
+  <svg class="icon-sprite" aria-hidden="true">
+    <symbol id="i-search" viewBox="0 0 16 16">
+      <circle cx="6.5" cy="6.5" r="4.75" fill="none" stroke="currentColor" stroke-width="1.5"/>
+      <path d="m10.2 10.2 3.4 3.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-folder" viewBox="0 0 16 16">
+      <path d="M1.5 3.25c0-.69.56-1.25 1.25-1.25h3.19c.33 0 .65.13.88.37L7.94 3.5h5.31c.69 0 1.25.56 1.25 1.25v7.5c0 .69-.56 1.25-1.25 1.25H2.75c-.69 0-1.25-.56-1.25-1.25v-9Z"/>
+    </symbol>
+    <symbol id="i-folder-plus" viewBox="0 0 16 16">
+      <path d="M1.5 3.5c0-.55.45-1 1-1h3.1l1.2 1.2h6.7c.55 0 1 .45 1 1v7.3c0 .55-.45 1-1 1h-11c-.55 0-1-.45-1-1V3.5Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+      <path d="M8 6.2v4.1M5.95 8.25h4.1" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-file" viewBox="0 0 16 16">
+      <path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25V1.75Zm8.75 1.5v2.5c0 .138.112.25.25.25h2.5a.25.25 0 0 0 .177-.427l-2.5-2.5a.25.25 0 0 0-.427.177Z"/>
+    </symbol>
+    <symbol id="i-file-plus" viewBox="0 0 16 16">
+      <path d="M2.5 1.75c0-.414.336-.75.75-.75h5.6l3.65 3.65v9.6c0 .414-.336.75-.75.75h-8.5a.75.75 0 0 1-.75-.75V1.75Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+      <path d="M9 1.5v3.25c0 .414.336.75.75.75H13M7 8v4M5 10h4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-upload" viewBox="0 0 16 16">
+      <path d="M8 2v7.5M5.2 4.8 8 2l2.8 2.8M3 10.5v2.25c0 .414.336.75.75.75h8.5a.75.75 0 0 0 .75-.75V10.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-trash" viewBox="0 0 16 16">
+      <path d="M2.5 4.25h11M6.25 2h3.5l.5 2.25M3.5 4.25l.55 9.25h7.9l.55-9.25M6.25 6.5v4.75M9.75 6.5v4.75" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-code" viewBox="0 0 16 16">
+      <path d="m5 4.5-3.5 3.5L5 11.5M11 4.5l3.5 3.5L11 11.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-refresh" viewBox="0 0 16 16">
+      <path d="M13 8a5 5 0 1 1-1.46-3.54M13 2.5V6H9.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-dots" viewBox="0 0 16 16">
+      <circle cx="3" cy="8" r="1.35"/><circle cx="8" cy="8" r="1.35"/><circle cx="13" cy="8" r="1.35"/>
+    </symbol>
+    <symbol id="i-download" viewBox="0 0 16 16">
+      <path d="M8 2v7.5M5.2 6.7 8 9.5l2.8-2.8M3 10.5v2.25c0 .414.336.75.75.75h8.5a.75.75 0 0 0 .75-.75V10.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-edit" viewBox="0 0 16 16">
+      <path d="m10.7 2.3 3 3L5.3 13.7 1.5 14.5l.8-3.8 8.4-8.4Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+      <path d="m9.4 3.6 3 3" fill="none" stroke="currentColor" stroke-width="1.3"/>
+    </symbol>
+    <symbol id="i-external" viewBox="0 0 16 16">
+      <path d="M6 3H3.75c-.414 0-.75.336-.75.75v8.5c0 .414.336.75.75.75h8.5c.414 0 .75-.336.75-.75V10M9 2h5v5M14 2 7.5 8.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-play" viewBox="0 0 16 16">
+      <path d="M5 3.4v9.2c0 .5.55.8.97.53l7.1-4.6a.62.62 0 0 0 0-1.06l-7.1-4.6A.63.63 0 0 0 5 3.4Z"/>
+    </symbol>
+    <symbol id="i-restart" viewBox="0 0 16 16">
+      <path d="M13 8a5 5 0 1 1-1.46-3.54M13 2.5V6H9.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-stop" viewBox="0 0 16 16">
+      <rect x="4" y="4" width="8" height="8" rx="1"/>
+    </symbol>
+    <symbol id="i-close" viewBox="0 0 16 16">
+      <path d="m3.5 3.5 9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+    </symbol>
+  </svg>
 
   <div class="shell">
-    <header class="masthead">
-      <div class="logo-block">
-        <img class="logo" src="/assets/branding.png" alt="Solace">
-        <p class="logo-caption">Termux control panel</p>
+    <header class="topbar">
+      <div class="brand">
+        <img class="brand-icon" src="/assets/favicon.png" alt="" width="40" height="40">
+        <div class="brand-copy">
+          <span class="brand-title">Solace Launcher</span>
+          <span class="brand-subtitle">Termux server control</span>
+        </div>
       </div>
+      <span class="local-chip">localhost:7089</span>
+    </header>
 
+    <section class="server-bar" aria-label="Server status and controls">
       <div class="server-state" id="server-state">
         <span class="state-dot" aria-hidden="true"></span>
         <div>
@@ -27,16 +90,31 @@
       </div>
 
       <div class="server-controls" role="group" aria-label="Server controls">
-        <button class="control start" id="start-button" disabled>Start Server</button>
-        <button class="control restart" id="restart-button" disabled>Restart</button>
-        <button class="control stop" id="stop-button" disabled>Stop</button>
+        <button class="control start" id="start-button" disabled>
+          <svg class="icon" aria-hidden="true"><use href="#i-play"></use></svg>
+          Start
+        </button>
+        <button class="control restart" id="restart-button" disabled>
+          <svg class="icon" aria-hidden="true"><use href="#i-restart"></use></svg>
+          Restart
+        </button>
+        <button class="control stop" id="stop-button" disabled>
+          <svg class="icon" aria-hidden="true"><use href="#i-stop"></use></svg>
+          Stop
+        </button>
       </div>
 
       <div class="panel-controls">
-        <a class="panel-button" id="dashboard-button" href="#" target="_blank" rel="noopener">Open Aspire Panel</a>
-        <a class="panel-button" id="portal-button" href="#" target="_blank" rel="noopener">Open Web Panel</a>
+        <a class="panel-button" id="dashboard-button" href="#" target="_blank" rel="noopener">
+          <span>Open Aspire Panel</span>
+          <svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg>
+        </a>
+        <a class="panel-button" id="portal-button" href="#" target="_blank" rel="noopener">
+          <span>Open Web Panel</span>
+          <svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg>
+        </a>
       </div>
-    </header>
+    </section>
 
     <nav class="tabs" aria-label="Launcher sections">
       <button class="tab active" type="button" data-tab="overview">Overview</button>
@@ -75,74 +153,94 @@
             <p class="status-copy" id="status-copy">Reading the local Solace installation.</p>
           </article>
 
-          <article class="card admin-card">
+          <article class="card resource-card">
             <div class="card-heading">
               <div>
-                <p class="eyebrow">Access</p>
-                <h2>Admin account</h2>
+                <p class="eyebrow">World assets</p>
+                <h2>Vanilla resource pack</h2>
               </div>
+              <span class="badge" id="pack-badge">Missing</span>
             </div>
-            <p class="muted">The initial web portal account is generated on the first server start.</p>
-            <div class="admin-account">
-              <span>admin@solace.com</span>
-              <code id="admin-password">Password hidden</code>
+            <div class="upload-zone" id="pack-drop">
+              <input id="pack-input" type="file" accept=".zip,application/zip" hidden>
+              <svg class="upload-icon" aria-hidden="true"><use href="#i-upload"></use></svg>
+              <p class="upload-title" id="pack-title">Drop vanilla.zip here</p>
+              <p class="upload-note" id="pack-note">Or choose the file from this device. It is saved directly to <code>staticdata/resourcepacks/vanilla.zip</code> inside Solace.</p>
+              <button class="button primary" id="pack-button" type="button">Choose vanilla.zip</button>
+              <p class="upload-status" id="pack-status"></p>
             </div>
-            <button class="button secondary" id="password-button" type="button">Reveal Password</button>
           </article>
         </div>
-
-        <article class="card resource-card">
-          <div class="card-heading">
-            <div>
-              <p class="eyebrow">World assets</p>
-              <h2>Vanilla resource pack</h2>
-            </div>
-            <span class="badge" id="pack-badge">Missing</span>
-          </div>
-          <div class="upload-zone" id="pack-drop">
-            <input id="pack-input" type="file" accept=".zip,application/zip" hidden>
-            <p class="upload-title" id="pack-title">Drop vanilla.zip here</p>
-            <p class="upload-note" id="pack-note">Or choose the file from this device. It is saved directly to <code>staticdata/resourcepacks/vanilla.zip</code> inside Solace.</p>
-            <button class="button primary" id="pack-button" type="button">Choose vanilla.zip</button>
-            <p class="upload-status" id="pack-status"></p>
-          </div>
-        </article>
       </section>
 
       <section class="tab-panel" id="panel-files">
-        <article class="card file-card">
-          <div class="card-heading file-heading">
+        <div class="files-screen">
+          <div class="files-screen-head">
             <div>
               <p class="eyebrow">Ubuntu / Solace</p>
-              <h2>File manager</h2>
+              <h1>Files</h1>
+              <p>Browse and edit files on the server.</p>
             </div>
-            <button class="button secondary small" id="files-refresh" type="button">Refresh</button>
+            <button class="button secondary small" id="files-refresh" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>
+              Refresh
+            </button>
           </div>
 
-          <div class="breadcrumb" id="breadcrumb" aria-label="Current folder"></div>
+          <div class="files-panel">
+            <div class="files-toolbar">
+              <label class="search-field" for="file-search">
+                <svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg>
+                <input id="file-search" type="search" placeholder="Search files" autocomplete="off" spellcheck="false">
+              </label>
 
-          <div class="file-toolbar">
-            <input id="file-input" type="file" hidden>
-            <button class="button secondary small" id="upload-button" type="button">Upload File</button>
-            <button class="button secondary small" id="new-folder-button" type="button">New Folder</button>
-            <label class="toggle"><input type="checkbox" id="show-hidden"> Show hidden and build files</label>
-          </div>
+              <input id="file-input" type="file" hidden>
 
-          <div class="table-wrap">
-            <table class="file-table">
-              <thead>
-                <tr>
-                  <th scope="col">Name</th>
-                  <th scope="col">Size</th>
-                  <th scope="col">Modified</th>
-                  <th scope="col">Actions</th>
-                </tr>
-              </thead>
-              <tbody id="file-list"></tbody>
-            </table>
+              <div class="file-buttons">
+                <button class="button secondary small" id="new-folder-button" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#i-folder-plus"></use></svg>
+                  Create Directory
+                </button>
+                <button class="button secondary small" id="upload-button" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#i-upload"></use></svg>
+                  Upload
+                </button>
+                <button class="button primary small" id="new-file-button" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#i-file-plus"></use></svg>
+                  New file
+                </button>
+                <button class="icon-button" id="files-delete" type="button" title="Delete selected" aria-label="Delete selected" disabled>
+                  <svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg>
+                </button>
+                <button class="icon-button" id="files-edit" type="button" title="Edit selected text file" aria-label="Edit selected text file" disabled>
+                  <svg class="icon" aria-hidden="true"><use href="#i-code"></use></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="files-subbar">
+              <div class="breadcrumb" id="breadcrumb" aria-label="Current folder"></div>
+              <span class="selection-count" id="selection-count">0 selected</span>
+              <label class="toggle"><input type="checkbox" id="show-hidden"> Show hidden and build files</label>
+            </div>
+
+            <div class="table-wrap">
+              <table class="file-table">
+                <thead>
+                  <tr>
+                    <th class="check-cell" scope="col"><input type="checkbox" id="files-select-all" aria-label="Select all files"></th>
+                    <th scope="col">Name</th>
+                    <th scope="col">Size</th>
+                    <th scope="col">Date</th>
+                    <th class="menu-cell" scope="col"><span class="sr-only">Actions</span></th>
+                  </tr>
+                </thead>
+                <tbody id="file-list"></tbody>
+              </table>
+            </div>
+            <p class="file-note">Browsing is restricted to <code>/root/Solace</code>. The <code>..</code> entry only moves back toward that folder.</p>
           </div>
-          <p class="muted small file-note">Browsing is restricted to <code>/root/Solace</code>. The <code>..</code> entry only moves back toward that folder.</p>
-        </article>
+        </div>
       </section>
 
       <section class="tab-panel" id="panel-logs">
@@ -279,7 +377,9 @@
           <p class="eyebrow">Text editor</p>
           <h2 id="editor-title">Edit file</h2>
         </div>
-        <button class="icon-button" id="editor-close" type="button" aria-label="Close editor">Close</button>
+        <button class="icon-button" id="editor-close" type="button" aria-label="Close editor">
+          <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>
+        </button>
       </div>
       <textarea id="editor-text" spellcheck="false" wrap="off"></textarea>
       <div class="modal-actions">

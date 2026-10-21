@@ -20,8 +20,6 @@
     factPort: $("fact-port"),
     factPack: $("fact-pack"),
     statusCopy: $("status-copy"),
-    adminPassword: $("admin-password"),
-    passwordButton: $("password-button"),
     packBadge: $("pack-badge"),
     packDrop: $("pack-drop"),
     packInput: $("pack-input"),
@@ -31,11 +29,17 @@
     packStatus: $("pack-status"),
     breadcrumb: $("breadcrumb"),
     fileInput: $("file-input"),
+    fileSearch: $("file-search"),
     uploadButton: $("upload-button"),
     newFolderButton: $("new-folder-button"),
+    newFileButton: $("new-file-button"),
     showHidden: $("show-hidden"),
     fileList: $("file-list"),
     filesRefresh: $("files-refresh"),
+    filesSelectAll: $("files-select-all"),
+    filesDelete: $("files-delete"),
+    filesEdit: $("files-edit"),
+    selectionCount: $("selection-count"),
     logSource: $("log-source"),
     logLines: $("log-lines"),
     logsRefresh: $("logs-refresh"),
@@ -65,8 +69,11 @@
     status: null,
     busy: false,
     filesPath: "",
+    fileParent: null,
     hidden: false,
     files: [],
+    search: "",
+    selected: new Set(),
     editingPath: null,
     originalText: "",
     toastTimer: null,
@@ -245,13 +252,6 @@
     }
 
     updatePack(status);
-
-    if (status.adminEmail) {
-      const account = elements.adminPassword.parentElement
-        ? elements.adminPassword.parentElement.querySelector("span")
-        : null;
-      if (account) account.textContent = status.adminEmail;
-    }
   }
 
   async function refreshStatus() {
@@ -324,6 +324,9 @@
   }
 
   function activateTab(name) {
+    document.querySelectorAll(".row-menu[open]").forEach((menu) => {
+      menu.open = false;
+    });
     document.querySelectorAll(".tab").forEach((tab) => {
       tab.classList.toggle("active", tab.dataset.tab === name);
     });
@@ -340,11 +343,15 @@
   }
 
   async function loadFiles(path = state.filesPath) {
+    state.search = "";
+    if (elements.fileSearch) elements.fileSearch.value = "";
+    state.selected.clear();
+    updateSelectionControls();
     elements.fileList.replaceChildren();
     const loading = document.createElement("tr");
     loading.className = "empty-row";
     const cell = document.createElement("td");
-    cell.colSpan = 4;
+    cell.colSpan = 5;
     cell.textContent = "Loading files...";
     loading.append(cell);
     elements.fileList.append(loading);
@@ -354,6 +361,7 @@
         `/api/files?path=${encodeURIComponent(path)}&hidden=${state.hidden ? "1" : "0"}`,
       );
       state.filesPath = data.path || "";
+      state.fileParent = data.parent === undefined ? null : data.parent;
       state.files = data.entries || [];
       renderBreadcrumb(state.filesPath);
       renderFiles(data);
@@ -362,7 +370,7 @@
       const row = document.createElement("tr");
       row.className = "empty-row";
       const cell = document.createElement("td");
-      cell.colSpan = 4;
+      cell.colSpan = 5;
       cell.textContent = error.message;
       row.append(cell);
       elements.fileList.append(row);
@@ -410,60 +418,215 @@
     return cell;
   }
 
-  function fileAction(label, handler, danger = false) {
+  function filteredEntries() {
+    if (!state.search) return state.files;
+    return state.files.filter((entry) => entry.name.toLowerCase().includes(state.search));
+  }
+
+  function updateSelectionControls() {
+    const known = new Set(state.files.map((entry) => entry.name));
+    for (const name of [...state.selected]) {
+      if (!known.has(name)) state.selected.delete(name);
+    }
+
+    const selectedEntries = state.files.filter((entry) => state.selected.has(entry.name));
+    const count = selectedEntries.length;
+    elements.selectionCount.textContent = `${count} selected`;
+    elements.filesDelete.disabled = count === 0;
+    elements.filesEdit.disabled = !(
+      count === 1 &&
+      selectedEntries[0].type !== "dir" &&
+      selectedEntries[0].editable
+    );
+
+    const visible = filteredEntries();
+    const selectedVisible = visible.filter((entry) => state.selected.has(entry.name)).length;
+    elements.filesSelectAll.checked = visible.length > 0 && selectedVisible === visible.length;
+    elements.filesSelectAll.indeterminate = selectedVisible > 0 && selectedVisible < visible.length;
+  }
+
+  function svgIcon(name, className = "icon") {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", className);
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("focusable", "false");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", `#i-${name}`);
+    use.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", `#i-${name}`);
+    svg.append(use);
+    return svg;
+  }
+
+  function addMenuAction(menu, details, label, iconName, handler, danger = false) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `mini-button${danger ? " danger" : ""}`;
-    button.textContent = label;
-    button.addEventListener("click", handler);
-    return button;
+    button.className = `menu-item${danger ? " danger" : ""}`;
+    button.append(svgIcon(iconName));
+    const text = document.createElement("span");
+    text.textContent = label;
+    button.append(text);
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      details.open = false;
+      handler();
+    });
+    menu.append(button);
+  }
+
+  function positionRowMenu(details, menu, trigger) {
+    if (!details.open) return;
+    const triggerBox = trigger.getBoundingClientRect();
+    const menuBox = menu.getBoundingClientRect();
+    const below = triggerBox.bottom + 4;
+    const above = triggerBox.top - menuBox.height - 4;
+    const top = below + menuBox.height > window.innerHeight - 8 ? above : below;
+    menu.style.top = `${Math.max(8, top)}px`;
+    menu.style.left = `${Math.max(
+      8,
+      Math.min(window.innerWidth - menuBox.width - 8, triggerBox.right - menuBox.width),
+    )}px`;
+  }
+
+  function buildRowMenu(entry) {
+    const details = document.createElement("details");
+    details.className = "row-menu";
+
+    const trigger = document.createElement("summary");
+    trigger.className = "menu-trigger";
+    trigger.title = "File actions";
+    trigger.setAttribute("aria-label", `Actions for ${entry.name}`);
+    trigger.append(svgIcon("dots"));
+
+    const menu = document.createElement("div");
+    menu.className = "menu-popover";
+
+    if (entry.type === "dir") {
+      addMenuAction(menu, details, "Open", "folder", () => openFolder(entry.name));
+    } else {
+      if (entry.editable) {
+        addMenuAction(menu, details, "Edit", "edit", () => openEditor(entry.name));
+      }
+      addMenuAction(menu, details, "Download", "download", () => downloadFile(entry.name));
+    }
+    addMenuAction(
+      menu,
+      details,
+      "Delete",
+      "trash",
+      () => deletePath(entry.name, entry.type === "dir"),
+      true,
+    );
+
+    details.append(trigger, menu);
+    details.addEventListener("toggle", () => {
+      if (!details.open) return;
+      document.querySelectorAll(".row-menu[open]").forEach((other) => {
+        if (other !== details) other.open = false;
+      });
+      requestAnimationFrame(() => positionRowMenu(details, menu, trigger));
+    });
+    return details;
+  }
+
+  function openFolder(name) {
+    loadFiles(currentFilePath(name));
   }
 
   function renderFiles(data) {
     elements.fileList.replaceChildren();
     const parent = data.parent;
+    const allEntries = data.entries || [];
+    const entries = filteredEntries();
 
     const parentRow = document.createElement("tr");
-    const parentCell = document.createElement("td");
+    parentRow.className = "parent-row";
+    const parentCheck = document.createElement("td");
+    parentCheck.className = "check-cell";
+    parentRow.append(parentCheck);
+
+    const parentName = document.createElement("td");
+    parentName.className = "name-cell";
     const parentButton = document.createElement("button");
     parentButton.type = "button";
     parentButton.className = "file-name parent";
-    parentButton.textContent = "..";
+    parentButton.append(svgIcon("folder", "icon file-icon"));
+    const parentLabel = document.createElement("span");
+    parentLabel.textContent = "..";
+    parentButton.append(parentLabel);
     parentButton.disabled = parent === null || parent === undefined;
     parentButton.title = parent === null ? "Already at the Solace folder root" : "Go up one folder";
     parentButton.addEventListener("click", () => {
       if (parent !== null && parent !== undefined) loadFiles(parent);
     });
-    parentCell.append(parentButton);
-    parentRow.append(parentCell);
-    appendCell(parentRow, "-");
-    appendCell(parentRow, "-");
-    appendCell(parentRow, "");
+    parentName.append(parentButton);
+    parentRow.append(parentName);
+    appendCell(parentRow, "-", "size-cell");
+    appendCell(parentRow, "-", "date-cell");
+    const parentMenu = document.createElement("td");
+    parentMenu.className = "menu-cell";
+    parentRow.append(parentMenu);
     elements.fileList.append(parentRow);
 
-    if (!data.entries || data.entries.length === 0) {
+    if (allEntries.length === 0) {
       const row = document.createElement("tr");
       row.className = "empty-row";
       const cell = document.createElement("td");
-      cell.colSpan = 4;
+      cell.colSpan = 5;
       cell.textContent = "This folder is empty.";
       row.append(cell);
       elements.fileList.append(row);
+      updateSelectionControls();
       return;
     }
 
-    data.entries.forEach((entry) => {
+    if (entries.length === 0) {
       const row = document.createElement("tr");
+      row.className = "empty-row";
+      const cell = document.createElement("td");
+      cell.colSpan = 5;
+      cell.textContent = "No files match this search.";
+      row.append(cell);
+      elements.fileList.append(row);
+      updateSelectionControls();
+      return;
+    }
+
+    entries.forEach((entry) => {
+      const row = document.createElement("tr");
+      row.className = "file-row";
+
+      const checkCell = document.createElement("td");
+      checkCell.className = "check-cell";
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.checked = state.selected.has(entry.name);
+      check.setAttribute("aria-label", `Select ${entry.name}`);
+      check.dataset.fileName = entry.name;
+      row.classList.toggle("selected", check.checked);
+      check.addEventListener("change", () => {
+        if (check.checked) state.selected.add(entry.name);
+        else state.selected.delete(entry.name);
+        row.classList.toggle("selected", check.checked);
+        updateSelectionControls();
+      });
+      checkCell.append(check);
+      row.append(checkCell);
+
       const nameCell = document.createElement("td");
+      nameCell.className = "name-cell";
       const nameButton = document.createElement("button");
       nameButton.type = "button";
       nameButton.className = `file-name${entry.type === "dir" ? " dir" : ""}`;
-      nameButton.textContent = entry.name;
+      nameButton.append(svgIcon(entry.type === "dir" ? "folder" : "file", "icon file-icon"));
+      const nameLabel = document.createElement("span");
+      nameLabel.textContent = entry.name;
+      nameButton.append(nameLabel);
       if (entry.type === "dir") {
         nameButton.title = "Open folder";
-        nameButton.addEventListener("click", () => {
-          loadFiles(state.filesPath ? `${state.filesPath}/${entry.name}` : entry.name);
-        });
+        nameButton.addEventListener("click", () => openFolder(entry.name));
+      } else if (entry.editable) {
+        nameButton.title = "Edit file";
+        nameButton.addEventListener("click", () => openEditor(entry.name));
       } else {
         nameButton.title = entry.type === "link" ? "Symbolic link" : "File";
         nameButton.disabled = true;
@@ -471,33 +634,18 @@
       nameCell.append(nameButton);
       row.append(nameCell);
 
-      appendCell(row, entry.type === "dir" ? "-" : formatBytes(entry.size));
-      appendCell(row, formatDate(entry.modified));
+      appendCell(row, entry.type === "dir" ? "-" : formatBytes(entry.size), "size-cell");
+      appendCell(row, formatDate(entry.modified), "date-cell");
 
-      const actions = document.createElement("td");
-      actions.className = "file-actions";
-      if (entry.type === "dir") {
-        actions.append(
-          fileAction("Open", () => {
-            loadFiles(state.filesPath ? `${state.filesPath}/${entry.name}` : entry.name);
-          }),
-        );
-      } else {
-        if (entry.editable) {
-          actions.append(fileAction("Edit", () => openEditor(entry.name)));
-        }
-        actions.append(fileAction("Download", () => downloadFile(entry.name)));
-      }
-      actions.append(
-        fileAction(
-          "Delete",
-          () => deletePath(entry.name, entry.type === "dir"),
-          true,
-        ),
-      );
-      row.append(actions);
+      const menuCell = document.createElement("td");
+      menuCell.className = "menu-cell";
+      menuCell.append(buildRowMenu(entry));
+      row.append(menuCell);
+
       elements.fileList.append(row);
     });
+
+    updateSelectionControls();
   }
 
   function currentFilePath(name) {
@@ -537,7 +685,6 @@
       return;
     }
     elements.uploadButton.disabled = true;
-    elements.uploadButton.textContent = "Uploading...";
     try {
       await uploadFile(
         `/api/files/write?path=${encodeURIComponent(target)}`,
@@ -550,7 +697,6 @@
       toast(error.message, true);
     } finally {
       elements.uploadButton.disabled = false;
-      elements.uploadButton.textContent = "Upload File";
       elements.fileInput.value = "";
     }
   }
@@ -568,6 +714,63 @@
     } catch (error) {
       toast(error.message, true);
     }
+  }
+
+  function openNewFile() {
+    const input = window.prompt("New file name:");
+    if (input === null) return;
+    const name = input.trim();
+    if (!name) return;
+    if (/[\\/]/.test(name) || name === "." || name === "..") {
+      toast("Use a file name without slashes.", true);
+      return;
+    }
+    if (state.files.some((entry) => entry.name === name)) {
+      toast(`"${name}" already exists.`, true);
+      return;
+    }
+    state.editingPath = currentFilePath(name);
+    state.originalText = "";
+    elements.editorTitle.textContent = state.editingPath;
+    elements.editorText.value = "";
+    elements.editorModal.classList.remove("hidden");
+    elements.editorText.focus();
+  }
+
+  async function deleteSelected() {
+    const selected = state.files.filter((entry) => state.selected.has(entry.name));
+    if (!selected.length) return;
+    const label = selected.length === 1 ? `"${selected[0].name}"` : `${selected.length} selected items`;
+    if (!window.confirm(`Delete ${label}? This cannot be undone.`)) return;
+
+    elements.filesDelete.disabled = true;
+    let failures = 0;
+    for (const entry of selected) {
+      try {
+        await api(`/api/files?path=${encodeURIComponent(currentFilePath(entry.name))}`, {
+          method: "DELETE",
+        });
+      } catch (error) {
+        failures += 1;
+        toast(`${entry.name}: ${error.message}`, true);
+      }
+    }
+    if (failures === 0) toast(`${selected.length} item(s) deleted.`);
+    await loadFiles(state.filesPath);
+  }
+
+  function editSelected() {
+    const selected = state.files.filter((entry) => state.selected.has(entry.name));
+    if (selected.length !== 1) return;
+    if (selected[0].type === "dir") {
+      toast("Select a text file to edit.", true);
+      return;
+    }
+    if (!selected[0].editable) {
+      toast("This file cannot be edited as text.", true);
+      return;
+    }
+    openEditor(selected[0].name);
   }
 
   function closeEditor(force = false) {
@@ -657,21 +860,6 @@
     }
   }
 
-  async function revealPassword() {
-    elements.passwordButton.disabled = true;
-    elements.passwordButton.textContent = "Reading...";
-    try {
-      const data = await api("/api/admin-password");
-      elements.adminPassword.textContent = data.password;
-      toast("Admin password loaded.");
-    } catch (error) {
-      toast(error.message, true);
-    } finally {
-      elements.passwordButton.disabled = false;
-      elements.passwordButton.textContent = "Reveal Password";
-    }
-  }
-
   elements.start.addEventListener("click", () => runAction("Start", "/api/start"));
   elements.restart.addEventListener("click", () => {
     if (window.confirm("Restart the Solace server?")) {
@@ -700,8 +888,6 @@
       runAction("EULA", "/api/eula", { action: "delete" });
     }
   });
-
-  elements.passwordButton.addEventListener("click", revealPassword);
 
   elements.ipForm.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -761,6 +947,21 @@
   elements.filesRefresh.addEventListener("click", () => loadFiles(state.filesPath));
   elements.uploadButton.addEventListener("click", () => elements.fileInput.click());
   elements.fileInput.addEventListener("change", () => uploadCurrentFile(elements.fileInput.files[0]));
+  elements.newFileButton.addEventListener("click", openNewFile);
+  elements.filesDelete.addEventListener("click", deleteSelected);
+  elements.filesEdit.addEventListener("click", editSelected);
+  elements.fileSearch.addEventListener("input", () => {
+    state.search = elements.fileSearch.value.trim().toLowerCase();
+    renderFiles({ parent: state.fileParent, entries: state.files });
+  });
+  elements.filesSelectAll.addEventListener("change", () => {
+    const select = elements.filesSelectAll.checked;
+    filteredEntries().forEach((entry) => {
+      if (select) state.selected.add(entry.name);
+      else state.selected.delete(entry.name);
+    });
+    renderFiles({ parent: state.fileParent, entries: state.files });
+  });
   elements.showHidden.addEventListener("change", () => {
     state.hidden = elements.showHidden.checked;
     loadFiles(state.filesPath);
@@ -813,9 +1014,23 @@
   elements.editorModal.addEventListener("click", (event) => {
     if (event.target === elements.editorModal) closeEditor();
   });
+  document.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target || !target.closest(".row-menu")) {
+      document.querySelectorAll(".row-menu[open]").forEach((menu) => {
+        menu.open = false;
+      });
+    }
+  });
+
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !elements.editorModal.classList.contains("hidden")) {
-      closeEditor();
+    if (event.key === "Escape") {
+      document.querySelectorAll(".row-menu[open]").forEach((menu) => {
+        menu.open = false;
+      });
+      if (!elements.editorModal.classList.contains("hidden")) {
+        closeEditor();
+      }
     }
     if (
       (event.ctrlKey || event.metaKey) &&

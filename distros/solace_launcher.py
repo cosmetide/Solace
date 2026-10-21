@@ -59,7 +59,6 @@ OPERATION_TIMEOUTS = {
     "eula": 30,
     "public-ip": 30,
     "reset": 300,
-    "admin-password": 180,
     "logs": 120,
     "processes": 30,
 }
@@ -317,7 +316,7 @@ class LauncherHandler(BaseHTTPRequestHandler):
 
     def _serve_static(self, path: str) -> None:
         if path == "/favicon.ico":
-            path = "/assets/branding.png"
+            path = "/assets/favicon.png"
         target = self._safe_static_path(path)
         if target is None or not target.is_file():
             self._send_text("Not found", HTTPStatus.NOT_FOUND)
@@ -435,12 +434,6 @@ class LauncherHandler(BaseHTTPRequestHandler):
                     ["processes"], timeout=OPERATION_TIMEOUTS["processes"]
                 )
                 self._send_json({"ok": True, "processes": clean_output(output)})
-                return
-            if path == "/api/admin-password":
-                output = run_backend(
-                    ["admin-password"], timeout=OPERATION_TIMEOUTS["admin-password"]
-                )
-                self._send_json({"ok": True, "password": clean_output(output).strip()})
                 return
             if path == "/api/files":
                 relative = query.get("path", [""])[0]

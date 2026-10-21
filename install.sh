@@ -464,7 +464,7 @@ INNER_SETUP
         LAUNCHER_SOURCE="$SCRIPT_DIR"
     fi
     [ -n "$LAUNCHER_SOURCE" ] || err "Launcher files are missing from the Ubuntu checkout. Re-run install.sh."
-    for launcher_file in distros/solace distros/solace-backend.sh distros/solace_launcher.py distros/launcher/index.html distros/launcher/app.js distros/launcher/styles.css; do
+    for launcher_file in distros/solace distros/solace-backend.sh distros/solace_launcher.py distros/launcher/index.html distros/launcher/app.js distros/launcher/styles.css distros/launcher/assets/favicon.png; do
         [ -f "$LAUNCHER_SOURCE/$launcher_file" ] || err "Launcher file missing: $launcher_file. Re-run install.sh."
     done
 
