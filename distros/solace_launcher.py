@@ -42,7 +42,6 @@ PORT = int(os.environ.get("SOLACE_LAUNCHER_PORT", "7089"))
 MAX_TEXT_BYTES = 2 * 1024 * 1024
 MAX_EDIT_BYTES = 10 * 1024 * 1024
 MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
-BUILD_DIRS = {".git", ".vs", "bin", "obj"}
 ANSI_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-_])")
 OSC_RE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?", re.DOTALL)
 EMOJI_RE = re.compile(
@@ -220,7 +219,7 @@ def list_files(relative: str, show_hidden: bool) -> dict:
     current = relative_file(target)
     entries = []
     for child in sorted(target.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())):
-        if not show_hidden and (child.name.startswith(".") or child.name in BUILD_DIRS):
+        if not show_hidden and child.name.startswith("."):
             continue
         try:
             entries.append(file_entry(child))

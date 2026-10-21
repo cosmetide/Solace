@@ -660,24 +660,14 @@ code {
 }
 
 .search-field {
-  position: relative;
   flex: 1 1 220px;
   min-width: 170px;
-}
-
-.search-field .icon {
-  position: absolute;
-  top: 50%;
-  left: 10px;
-  color: var(--muted);
-  transform: translateY(-50%);
-  pointer-events: none;
 }
 
 .search-field input {
   width: 100%;
   min-height: 32px;
-  padding: 5px 10px 5px 32px;
+  padding: 5px 10px;
   color: var(--text);
   font: inherit;
   font-size: 12px;

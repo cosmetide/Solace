@@ -11,10 +11,6 @@
 </head>
 <body>
   <svg class="icon-sprite" aria-hidden="true">
-    <symbol id="i-search" viewBox="0 0 16 16">
-      <circle cx="6.5" cy="6.5" r="4.75" fill="none" stroke="currentColor" stroke-width="1.5"/>
-      <path d="m10.2 10.2 3.4 3.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-    </symbol>
     <symbol id="i-folder" viewBox="0 0 16 16">
       <path d="M1.5 3.25c0-.69.56-1.25 1.25-1.25h3.19c.33 0 .65.13.88.37L7.94 3.5h5.31c.69 0 1.25.56 1.25 1.25v7.5c0 .69-.56 1.25-1.25 1.25H2.75c-.69 0-1.25-.56-1.25-1.25v-9Z"/>
     </symbol>
@@ -179,7 +175,7 @@
             <div>
               <p class="eyebrow">Ubuntu / Solace</p>
               <h1>Files</h1>
-              <p>Browse and edit files on the server.</p>
+              <p>Browse the files used by the installed Solace server in <code>/root/Solace</code>.</p>
             </div>
             <button class="button secondary small" id="files-refresh" type="button">
               <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>
@@ -190,7 +186,6 @@
           <div class="files-panel">
             <div class="files-toolbar">
               <label class="search-field" for="file-search">
-                <svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg>
                 <input id="file-search" type="search" placeholder="Search files" autocomplete="off" spellcheck="false">
               </label>
 
@@ -221,7 +216,7 @@
             <div class="files-subbar">
               <div class="breadcrumb" id="breadcrumb" aria-label="Current folder"></div>
               <span class="selection-count" id="selection-count">0 selected</span>
-              <label class="toggle"><input type="checkbox" id="show-hidden"> Show hidden and build files</label>
+              <label class="toggle"><input type="checkbox" id="show-hidden"> Show hidden files</label>
             </div>
 
             <div class="table-wrap">
@@ -238,7 +233,7 @@
                 <tbody id="file-list"></tbody>
               </table>
             </div>
-            <p class="file-note">Browsing is restricted to <code>/root/Solace</code>. The <code>..</code> entry only moves back toward that folder.</p>
+            <p class="file-note">Installation root: <code>/root/Solace</code>. Build output used by the running services is under <code>src/*/bin</code>. The <code>..</code> entry only moves back toward this folder.</p>
           </div>
         </div>
       </section>
@@ -318,20 +313,6 @@
               </div>
               <p class="muted small">Switching branches stops the server and updates the checkout. A rebuild may be required.</p>
             </form>
-          </article>
-
-          <article class="card">
-            <div class="card-heading">
-              <div>
-                <p class="eyebrow">License</p>
-                <h2>Minecraft EULA</h2>
-              </div>
-            </div>
-            <p class="muted" id="eula-state">Checking EULA status.</p>
-            <div class="button-row">
-              <button class="button secondary small" id="settings-accept-eula" type="button">Accept EULA</button>
-              <button class="button secondary small" id="revoke-eula" type="button">Revoke Acceptance</button>
-            </div>
           </article>
 
           <article class="card">

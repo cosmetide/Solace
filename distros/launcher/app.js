@@ -50,9 +50,6 @@
     publicIp: $("public-ip"),
     branchForm: $("branch-form"),
     branchName: $("branch-name"),
-    eulaState: $("eula-state"),
-    settingsAcceptEula: $("settings-accept-eula"),
-    revokeEula: $("revoke-eula"),
     updateButton: $("update-button"),
     resetButton: $("reset-button"),
     aboutLine: $("about-line"),
@@ -233,11 +230,6 @@
     setPanelLink(elements.portal, status.portalUrl, running && Boolean(status.portalUrl));
 
     elements.eulaNotice.classList.toggle("hidden", Boolean(status.eulaAccepted));
-    elements.eulaState.textContent = status.eulaAccepted
-      ? "The Minecraft EULA has been accepted."
-      : "The Minecraft EULA has not been accepted. Start is disabled until it is accepted.";
-    elements.settingsAcceptEula.disabled = Boolean(status.eulaAccepted);
-    elements.revokeEula.disabled = !status.eulaAccepted;
 
     if (status.state === "running") {
       elements.statusCopy.textContent = status.dashboardUrl
@@ -880,15 +872,6 @@
   });
 
   elements.acceptEula.addEventListener("click", () => runAction("EULA", "/api/eula", { action: "accept" }));
-  elements.settingsAcceptEula.addEventListener("click", () =>
-    runAction("EULA", "/api/eula", { action: "accept" }),
-  );
-  elements.revokeEula.addEventListener("click", () => {
-    if (window.confirm("Revoke the Minecraft EULA acceptance? The server will no longer start.")) {
-      runAction("EULA", "/api/eula", { action: "delete" });
-    }
-  });
-
   elements.ipForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const ip = elements.publicIp.value.trim();
